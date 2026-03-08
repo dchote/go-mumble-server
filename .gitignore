@@ -1,0 +1,54 @@
+# Build output
+build/
+dist/
+
+# Go
+*.exe
+*.test
+*.out
+*.prof
+
+# Dependencies
+vendor/
+node_modules/
+
+# Frontend build artifacts
+frontend/dist/
+cmd/go-mumble-server/frontend-dist/
+
+# Data
+*.sqlite
+*.sqlite-journal
+*.sqlite-wal
+*.sqlite-shm
+*.db
+
+# Keys and secrets
+*.pem
+*.key
+*.crt
+!configs/*.example.*
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Debug
+__debug_bin*
+*.log
+
+# Generated protobuf (re-generate from source)
+pkg/mumble/proto/*.pb.go
+
+# Research (reference implementations, not part of the project)
+research/
+
+# Cursor
+.cursor/

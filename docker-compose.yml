@@ -1,0 +1,22 @@
+services:
+  go-mumble-server:
+    build: .
+    ports:
+      - "64738:64738/tcp"
+      - "64738:64738/udp"
+      - "9090:9090/tcp"
+    environment:
+      MUMBLE_SECURITY_MODE: legacy
+      MUMBLE_DATABASE_PATH: /data/mumble-server.sqlite
+    volumes:
+      - mumble-data:/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:9090/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+
+volumes:
+  mumble-data:

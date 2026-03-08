@@ -1,0 +1,32 @@
+[Unit]
+Description=go-mumble-server - Mumble voice chat server
+Documentation=https://github.com/dchote/go-mumble-server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=mumble-server
+Group=mumble-server
+ExecStart=/usr/bin/go-mumble-server -config /etc/go-mumble-server/mumble-server.toml
+WorkingDirectory=/var/lib/go-mumble-server
+Restart=on-failure
+RestartSec=5
+
+# Security hardening
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+ReadWritePaths=/var/lib/go-mumble-server /var/log/go-mumble-server
+ReadOnlyPaths=/etc/go-mumble-server
+
+# Resource limits
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,45 @@
+version: 2
+
+project_name: go-mumble-server
+
+builds:
+  - id: server
+    main: ./cmd/go-mumble-server
+    binary: go-mumble-server
+    goos:
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    env:
+      - CGO_ENABLED=1
+    ldflags:
+      - -s -w
+      - -X main.version={{ .Version }}
+      - -X main.commit={{ .ShortCommit }}
+      - -X main.buildTime={{ .Date }}
+
+nfpms:
+  - id: default
+    ids:
+      - server
+    package_name: go-mumble-server
+    file_name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Arch }}.deb"
+    formats:
+      - deb
+    description: Modern Mumble voice chat server written in Go
+    homepage: https://github.com/dchote/go-mumble-server
+    maintainer: Daniel Chote <daniel@chote.com>
+    license: MIT
+    bindir: /usr/bin
+    contents:
+      - src: configs/mumble-server.toml
+        dst: /usr/share/go-mumble-server/mumble-server.toml
+      - src: configs/go-mumble-server.service
+        dst: /lib/systemd/system/go-mumble-server.service
+    scripts:
+      postinstall: scripts/postinstall.sh
+      preremove: scripts/preremove.sh
+    deb:
+      lintian_overrides:
+        - statically-linked-binary

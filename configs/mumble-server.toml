@@ -1,0 +1,50 @@
+# go-mumble-server configuration
+# Values can reference environment variables: ${ENV_VAR}
+
+[security]
+# Protocol security mode: "legacy" (compatible with all Mumble clients) or "secure" (modern crypto)
+mode = "legacy"
+
+[network]
+# Mumble protocol port (TCP + UDP)
+port = 64738
+# REST management API port
+rest_port = 9090
+# Bind address
+host = "0.0.0.0"
+
+[tls]
+# TLS certificate and key (PEM format)
+# If not set, a self-signed certificate is generated on first run
+# cert = "/etc/go-mumble-server/mumble-server.crt"
+# key = "/etc/go-mumble-server/mumble-server.key"
+
+[server]
+# Maximum concurrent users (0 = unlimited)
+max_users = 100
+# Maximum bandwidth per user in bits/sec
+max_bandwidth = 72000
+# Server welcome message (HTML)
+welcome_text = ""
+# Server password (empty = no password)
+server_password = ""
+
+[database]
+# SQLite database path
+path = "mumble-server.sqlite"
+
+[logging]
+# Log level: debug, info, warn, error
+level = "info"
+
+[channels]
+# Maximum channel nesting depth
+nesting_limit = 10
+# Maximum total channels
+count_limit = 1000
+
+[users]
+# Default channel ID for new connections
+default_channel = 0
+# Require client certificates
+cert_required = false

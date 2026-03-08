@@ -1,0 +1,56 @@
+name: Release
+
+on:
+  workflow_dispatch:
+  release:
+    types: [published]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "yarn"
+          cache-dependency-path: frontend/yarn.lock
+
+      - name: Build frontend
+        run: |
+          cd frontend && yarn install --frozen-lockfile && yarn build && cd ..
+          rm -rf cmd/go-mumble-server/frontend-dist
+          cp -r frontend/dist cmd/go-mumble-server/frontend-dist
+
+      - name: Run GoReleaser (goreleaser-cross for CGO)
+        run: |
+          if [ "${{ github.event_name }}" = "release" ]; then
+            ARGS="release --clean"
+            TAG="${{ github.event.release.tag_name }}"
+          else
+            ARGS="release --snapshot --skip=publish --clean"
+            TAG="v0.0.0-${{ github.sha }}"
+          fi
+          docker run --rm --privileged \
+            -v ${{ github.workspace }}:/go/src/github.com/${{ github.repository }} \
+            -w /go/src/github.com/${{ github.repository }} \
+            -v /var/run/docker.sock:/var/run/docker.sock \
+            -e GITHUB_TOKEN \
+            -e CGO_ENABLED=1 \
+            -e GORELEASER_CURRENT_TAG="$TAG" \
+            ghcr.io/goreleaser/goreleaser-cross:v1.24.0 \
+            $ARGS
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload .deb artifacts
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v4
+        with:
+          name: deb-packages
+          path: dist/*.deb
