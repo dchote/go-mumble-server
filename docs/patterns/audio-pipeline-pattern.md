@@ -1,6 +1,6 @@
 # Audio Pipeline Pattern
 
-> **Status:** Design
+> **Status:** Implemented
 
 ## Overview
 
@@ -62,11 +62,11 @@ Codec IDs:
 - `3` — CELT Beta
 - `4` — Opus (preferred)
 
-## Packet Format (Protobuf UDP — since protocol 1.5)
+## Packet Format (Modern UDP — since protocol 1.5)
 
-Modern clients may use protobuf-encoded UDP packets (`MumbleUDP.proto`):
+Modern clients may use wire-encoded UDP packets:
 
-```protobuf
+```
 message Audio {
     uint32 target = 1;           // voice target (0 = normal, 1-30 = whisper, 31 = loopback)
     uint32 context = 2;          // 0 = normal, 1 = shout
@@ -87,7 +87,7 @@ message Audio {
 | 1–30 | Whisper — send to preconfigured `VoiceTarget` |
 | 31 | Server loopback — echo back to sender |
 
-Whisper targets are configured per-client via `VoiceTarget` protobuf messages and can specify:
+Whisper targets are configured per-client via `VoiceTarget` messages and can specify:
 - Specific user sessions
 - A channel (with options: links, children, group filter)
 

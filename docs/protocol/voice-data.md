@@ -4,7 +4,7 @@
 
 ## Overview
 
-Voice data travels over UDP (encrypted with an AEAD cipher) or is tunneled over the TCP control channel via `UDPTunnel` (message type 1). Two packet formats exist: the legacy binary format and the modern protobuf format (introduced in Mumble 1.5.0). The encryption algorithm depends on the [security mode](security-modes.md) — OCB2-AES128 in legacy mode, AES-256-GCM in secure mode.
+Voice data travels over UDP (encrypted with an AEAD cipher) or is tunneled over the TCP control channel via `UDPTunnel` (message type 1). Two packet formats exist: the legacy binary format and the modern wire format (introduced in Mumble 1.5.0, similar encoding style). The encryption algorithm depends on the [security mode](security-modes.md) — OCB2-AES128 in legacy mode, AES-256-GCM in secure mode.
 
 ## Transport
 
@@ -19,7 +19,7 @@ Voice data travels over UDP (encrypted with an AEAD cipher) or is tunneled over 
 ### TCP Tunnel (UDPTunnel)
 
 - Used when UDP is unavailable (NAT, firewall).
-- Message type 1 in the TCP framing — the payload is the raw (decrypted) audio packet, **not** protobuf-encoded.
+- Message type 1 in the TCP framing — the payload is the raw (decrypted) audio packet.
 - Higher latency due to TCP head-of-line blocking.
 - Clients auto-detect UDP availability and fall back to TCP.
 
@@ -76,7 +76,7 @@ Used in all Mumble versions. Still the format inside `UDPTunnel` for legacy clie
 
 ### Varint Encoding
 
-Mumble uses a custom varint encoding (not standard protobuf varint):
+Mumble uses a custom varint encoding:
 
 | First byte pattern | Value range | Bytes used |
 |---------------------|-------------|------------|
@@ -100,9 +100,9 @@ Reference: `research/gumble/gumble/varint/read.go` and `write.go`.
 
 Bit 13 of the payload length varint indicates this is the last audio frame in a speech sequence (the user stopped talking). Clients use this to fade out audio smoothly.
 
-## Protobuf UDP Format (Protocol 1.5+)
+## Modern UDP Format (Protocol 1.5+)
 
-Modern clients may use protobuf-encoded UDP packets, defined in `MumbleUDP.proto`.
+Modern clients may use wire-encoded UDP packets. We implement this with native Go structs; the upstream spec is in `MumbleUDP.proto` (reference only).
 
 ### Audio Message
 
@@ -147,7 +147,7 @@ UDP pings are used for latency measurement and to maintain NAT mappings.
 
 ### Packet Type Discrimination
 
-Protobuf UDP packets are distinguished from legacy packets by the first byte:
+Modern wire-format UDP packets are distinguished from legacy packets by the first byte:
 
 - Legacy packets: first byte has codec in bits 7–5 (values 0–7, so byte is 0x00–0xFF with specific patterns)
 - Protobuf packets: prefixed with a type byte matching `MumbleUDP` message types
@@ -177,7 +177,7 @@ For each recipient, the server:
 
 ## Reference
 
-- Protobuf definitions: `research/mumble/src/MumbleUDP.proto`
+- Protocol reference: `research/mumble/src/MumbleUDP.proto` (reference only; we use native Go encoding)
 - Legacy format: `research/gumble/gumble/handlers.go` (`handleUDPTunnel`)
 - Varint: `research/gumble/gumble/varint/`
 - Audio routing: `research/mumble/src/murmur/Server.cpp` (`processMsg`)

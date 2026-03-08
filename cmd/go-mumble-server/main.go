@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io/fs"
 	"log/slog"
-	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
@@ -14,7 +13,7 @@ import (
 
 	"github.com/dchote/go-mumble-server/internal/config"
 	"github.com/dchote/go-mumble-server/internal/database"
-	"github.com/dchote/go-mumble-server/internal/rest"
+	"github.com/dchote/go-mumble-server/internal/server"
 )
 
 var (
@@ -56,28 +55,20 @@ func main() {
 		}
 	}
 
-	handler := rest.Router(db, cfg, feFS)
-	srv := &http.Server{
-		Addr:         fmt.Sprintf("%s:%d", cfg.Host, cfg.RESTPort),
-		Handler:      handler,
-		ReadTimeout:  15 * time.Second,
-		WriteTimeout: 15 * time.Second,
-	}
-
-	slog.Info("starting REST API", "addr", srv.Addr, "frontend_embed", cfg.FrontendEmbed)
-
+	srv := server.New(cfg, db, feFS)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
 	go func() {
-		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			slog.Error("REST server failed", "err", err)
-			os.Exit(1)
-		}
+		done <- srv.Start(ctx)
 	}()
 
 	<-waitForShutdown()
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	if err := srv.Shutdown(ctx); err != nil {
-		slog.Error("shutdown", "err", err)
+	cancel()
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer shutdownCancel()
+	_ = srv.Shutdown(shutdownCtx)
+	if err := <-done; err != nil {
+		slog.Error("server exit", "err", err)
 	}
 }
 

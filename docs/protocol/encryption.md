@@ -140,7 +140,7 @@ The `CryptSetup` message carries larger fields in secure mode:
 | `client_nonce` | 12 bytes | Initial nonce prefix for client→server |
 | `server_nonce` | 12 bytes | Initial nonce prefix for server→client |
 
-The `CryptSetup` protobuf uses `bytes` fields, so larger keys are wire-compatible.
+The `CryptSetup` message uses `bytes` fields, so larger keys are wire-compatible.
 
 #### Secure Nonce Management
 
@@ -247,7 +247,7 @@ See [security-modes.md](security-modes.md) for the full local storage encryption
 ## Reference
 
 - Legacy CryptState: `research/mumble/src/crypto/CryptStateOCB2.h` and `.cpp`
-- Legacy key exchange: `CryptSetup` in `research/mumble/src/Mumble.proto`
+- Legacy key exchange: `CryptSetup` message (see control-messages.md; we use native Go, not protobuf)
 - Legacy password hashing: `research/mumble/src/murmur/PBKDF2.cpp`
 - OCB2 vulnerability: [eprint.iacr.org/2019/311](https://eprint.iacr.org/2019/311)
 - AES-GCM specification: [NIST SP 800-38D](https://csrc.nist.gov/publications/detail/sp/800-38d/final)

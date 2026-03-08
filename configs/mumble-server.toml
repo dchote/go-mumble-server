@@ -48,3 +48,9 @@ count_limit = 1000
 default_channel = 0
 # Require client certificates
 cert_required = false
+
+[bonjour]
+# Enable mDNS/Bonjour LAN discovery
+enabled = false
+# Display name for LAN discovery
+register_name = "go-mumble-server"

@@ -1,0 +1,1048 @@
+package mumble
+
+import (
+	"crypto/rand"
+	"log/slog"
+	"net"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/dchote/go-mumble-server/internal/acl"
+	"github.com/dchote/go-mumble-server/internal/audio"
+	"github.com/dchote/go-mumble-server/internal/auth"
+	"github.com/dchote/go-mumble-server/internal/ban"
+	"github.com/dchote/go-mumble-server/internal/channel"
+	"github.com/dchote/go-mumble-server/internal/config"
+	"github.com/dchote/go-mumble-server/internal/connection"
+	"github.com/dchote/go-mumble-server/internal/user"
+	"github.com/dchote/go-mumble-server/pkg/mumble"
+	mumbleaudio "github.com/dchote/go-mumble-server/pkg/mumble/audio"
+	"github.com/dchote/go-mumble-server/pkg/mumble/protocol"
+	"github.com/dchote/go-mumble-server/pkg/mumble/protocol/messages"
+	"gorm.io/gorm"
+)
+
+// Server holds Mumble server state and builds the handler table.
+type Server struct {
+	cfg          *config.Config
+	db           *gorm.DB
+	users        *user.Manager
+	chans        *channel.Manager
+	bans         *ban.Manager
+	acl          *acl.Evaluator
+	table        protocol.HandlerTable
+	connMu       sync.RWMutex
+	conns        map[uint32]*connection.Conn
+	addrBySession sync.Map
+	voiceTargets    sync.Map // session -> map[targetID][]session
+	textRateLimiter sync.Map // session -> *textRateState
+	router          *audio.Router
+	udpConn         net.PacketConn
+}
+
+type textRateState struct {
+	mu       sync.Mutex
+	count    int
+	windowAt time.Time
+}
+
+// HandleUDP processes an incoming UDP voice packet.
+func (s *Server) HandleUDP(addr net.Addr, data []byte) {
+	if s.udpConn == nil || s.router == nil {
+		return
+	}
+	plain := make([]byte, len(data)+256)
+	var senderSession uint32
+	s.connMu.RLock()
+	for sid, c := range s.conns {
+		if c.Crypt == nil || c.State() != connection.StateActive {
+			continue
+		}
+		err := c.Crypt.Decrypt(plain, data)
+		if err == nil {
+			senderSession = sid
+			plain = plain[:len(data)-c.Crypt.Overhead()]
+			break
+		}
+	}
+	s.connMu.RUnlock()
+	if senderSession == 0 {
+		return
+	}
+	s.addrBySession.Store(senderSession, addr)
+	p, err := mumbleaudio.ParsePacket(plain)
+	if err != nil {
+		return
+	}
+	_ = s.router.Route(senderSession, p.Target, plain)
+}
+
+// SendAudio implements audio.RecipientSender. Encrypts with recipient's key and sends via UDP.
+func (s *Server) SendAudio(sessionID uint32, packet []byte) error {
+	s.connMu.RLock()
+	c, ok := s.conns[sessionID]
+	recipientAddr, _ := s.addrBySession.Load(sessionID)
+	s.connMu.RUnlock()
+	if !ok || c == nil || c.Crypt == nil || recipientAddr == nil || s.udpConn == nil {
+		return nil
+	}
+	addr := recipientAddr.(net.Addr)
+	plain := packet
+	overhead := c.Crypt.Overhead()
+	enc := make([]byte, len(plain)+overhead)
+	if err := c.Crypt.Encrypt(enc, plain); err != nil {
+		return err
+	}
+	_, err := s.udpConn.WriteTo(enc, addr)
+	return err
+}
+
+func (s *Server) canSenderSpeak(sessionID uint32) bool {
+	u, ok := s.users.GetUser(sessionID)
+	if !ok {
+		return false
+	}
+	return !u.Mute && s.acl.Check(u.UserID, u.ChannelID, mumble.PermissionSpeak)
+}
+
+func (s *Server) audioFilterRecipient(senderSessionID, recipientSessionID uint32) bool {
+	u, ok := s.users.GetUser(recipientSessionID)
+	if !ok {
+		return false
+	}
+	if u.Deaf || u.SelfDeaf {
+		return false
+	}
+	return s.acl.Check(u.UserID, u.ChannelID, mumble.PermissionListen)
+}
+
+func (s *Server) getVoiceTargetRecipients(sessionID uint32, targetID uint8) []uint32 {
+	v, ok := s.voiceTargets.Load(sessionID)
+	if !ok {
+		return nil
+	}
+	m, ok := v.(map[uint8][]uint32)
+	if !ok {
+		return nil
+	}
+	return m[targetID]
+}
+
+// NewServer creates a Mumble protocol server.
+func NewServer(cfg *config.Config, db *gorm.DB, serverID uint, udpConn net.PacketConn) *Server {
+	s := &Server{
+		cfg:     cfg,
+		db:      db,
+		users:   user.NewManager(db, cfg.MaxUsers),
+		chans:   channel.NewManager(db, serverID),
+		bans:    ban.NewManager(db, serverID),
+		acl:     &acl.Evaluator{},
+		table:   protocol.NewHandlerTable(),
+		conns:   make(map[uint32]*connection.Conn),
+		udpConn: udpConn,
+	}
+	s.router = audio.NewRouterWithConfig(audio.RouterConfig{
+		Sender: s,
+		GetChan: func(sid uint32) uint32 {
+			u, ok := s.users.GetUser(sid)
+			if !ok {
+				return 0
+			}
+			return u.ChannelID
+		},
+		GetUsersInChan:   s.users.SessionIDsInChannel,
+		GetVoiceTarget:   s.getVoiceTargetRecipients,
+		GetLinkedChans:   func(cid uint32) []uint32 {
+			ids := s.chans.LinkedChannelIDs(cid)
+			if len(ids) <= 1 {
+				return nil
+			}
+			return ids[1:]
+		},
+		FilterRecipient:  s.audioFilterRecipient,
+		CanSenderSpeak:   s.canSenderSpeak,
+	})
+	s.registerHandlers()
+	return s
+}
+
+func (s *Server) registerHandlers() {
+	s.table[protocol.MessageVersion] = s.handleVersion
+	s.table[protocol.MessageAuthenticate] = s.handleAuthenticate
+	s.table[protocol.MessagePing] = s.handlePing
+	s.table[protocol.MessageUserRemove] = s.handleUserRemove
+	s.table[protocol.MessageUserState] = s.handleUserState
+	s.table[protocol.MessageCryptSetup] = s.handleCryptSetup
+	s.table[protocol.MessageChannelState] = s.handleChannelState
+	s.table[protocol.MessageChannelRemove] = s.handleChannelRemove
+	s.table[protocol.MessageTextMessage] = s.handleTextMessage
+	s.table[protocol.MessageVoiceTarget] = s.handleVoiceTarget
+	s.table[protocol.MessageUDPTunnel] = s.handleUDPTunnel
+	s.table[protocol.MessageBanList] = s.handleBanList
+	s.table[protocol.MessageACL] = s.handleACL
+	s.table[protocol.MessagePermissionQuery] = s.handlePermissionQuery
+	s.table[protocol.MessageRequestBlob] = s.handleRequestBlob
+	s.table[protocol.MessageUserStats] = s.handleUserStats
+	s.table[protocol.MessageQueryUsers] = s.handleQueryUsers
+	s.table[protocol.MessageUserList] = s.handleUserList
+	s.table[protocol.MessageContextActionModify] = s.handleContextActionModify
+	s.table[protocol.MessageContextAction] = s.handleContextAction
+	s.table[protocol.MessagePluginDataTransmission] = s.handlePluginDataTransmission
+}
+
+// HandlerTable returns the handler table.
+func (s *Server) HandlerTable() protocol.HandlerTable {
+	return s.table
+}
+
+// UserManager returns the user manager.
+func (s *Server) UserManager() *user.Manager {
+	return s.users
+}
+
+// RegisterConn registers a connection for broadcasting.
+func (s *Server) RegisterConn(sessionID uint32, c *connection.Conn) {
+	s.connMu.Lock()
+	defer s.connMu.Unlock()
+	s.conns[sessionID] = c
+}
+
+// UnregisterConn removes a connection.
+func (s *Server) UnregisterConn(sessionID uint32) {
+	s.connMu.Lock()
+	delete(s.conns, sessionID)
+	s.connMu.Unlock()
+	s.voiceTargets.Delete(sessionID)
+	s.addrBySession.Delete(sessionID)
+	s.textRateLimiter.Delete(sessionID)
+	s.chans.CleanEmptyTempChannels(func(cid uint32) bool {
+		return len(s.users.ListByChannel(cid)) > 0
+	})
+}
+
+// Broadcast sends a message to all connections except skipSession.
+func (s *Server) Broadcast(skipSession uint32, msgType protocol.MessageType, msg messages.Message) {
+	s.connMu.RLock()
+	defer s.connMu.RUnlock()
+	for sid, c := range s.conns {
+		if sid != skipSession {
+			_ = c.WriteMessage(msgType, msg)
+		}
+	}
+}
+
+func (s *Server) handleVersion(msgType protocol.MessageType, payload []byte, ctx interface{}) error {
+	c := ctx.(*connection.Conn)
+	if len(payload) > 0 {
+		var v messages.Version
+		if err := v.Unmarshal(payload); err != nil {
+			return err
+		}
+		slog.Debug("client version", "release", v.Release, "os", v.OS)
+	}
+	_ = c
+	return nil
+}
+
+func (s *Server) handleAuthenticate(msgType protocol.MessageType, payload []byte, ctx interface{}) error {
+	c := ctx.(*connection.Conn)
+	var authMsg messages.Authenticate
+	if err := authMsg.Unmarshal(payload); err != nil {
+		return err
+	}
+	addr := c.RemoteAddr()
+	if s.bans.IsBanned(addr, "") {
+		return s.sendReject(c, messages.RejectWrongServerPW, "Banned")
+	}
+	if authMsg.Username == "" {
+		return s.sendReject(c, messages.RejectInvalidUsername, "Username required")
+	}
+	if _, ok := s.users.GetByName(authMsg.Username); ok {
+		return s.sendReject(c, messages.RejectUsernameInUse, "Username in use")
+	}
+	if s.users.Count() >= s.cfg.MaxUsers && s.cfg.MaxUsers > 0 {
+		return s.sendReject(c, messages.RejectServerFull, "Server full")
+	}
+	if s.cfg.ServerPassword != "" {
+		if authMsg.Password != s.cfg.ServerPassword {
+			_, hash, found := s.users.RegisterDBUser(authMsg.Username)
+			if !found || !auth.ComparePassword(hash, authMsg.Password) {
+				return s.sendReject(c, messages.RejectWrongServerPW, "Wrong password")
+			}
+		}
+	}
+	defaultChan := uint32(s.chans.RootID())
+	if s.cfg.DefaultChannel > 0 {
+		defaultChan = uint32(s.cfg.DefaultChannel)
+	}
+	u := &mumble.User{
+		SessionID: 0,
+		UserID:    0,
+		ChannelID: defaultChan,
+		Name:      authMsg.Username,
+	}
+	if !s.users.Add(u) {
+		return s.sendReject(c, messages.RejectServerFull, "Server full")
+	}
+	c.SetSessionID(u.SessionID)
+	c.SetUser(u.Name, u.UserID, u.ChannelID)
+	c.SetActive()
+	s.RegisterConn(u.SessionID, c)
+	s.sendSync(c, u)
+	s.Broadcast(u.SessionID, protocol.MessageUserState, userToState(u))
+	slog.Info("Mumble client authenticated", "user", u.Name, "session", u.SessionID, "channel", u.ChannelID)
+	return nil
+}
+
+func (s *Server) sendReject(c *connection.Conn, typ messages.RejectType, reason string) error {
+	return c.WriteMessage(protocol.MessageReject, &messages.Reject{Type: typ, Reason: reason})
+}
+
+func (s *Server) sendSync(c *connection.Conn, u *mumble.User) {
+	key, encNonce, decNonce := s.generateCryptSetup()
+	c.Crypt.SetKey(key, encNonce, decNonce)
+	_ = c.WriteMessage(protocol.MessageCryptSetup, &messages.CryptSetup{
+		Key:         key,
+		ClientNonce: encNonce,
+		ServerNonce: decNonce,
+	})
+	_ = c.WriteMessage(protocol.MessageCodecVersion, &messages.CodecVersion{Opus: true})
+	for _, ch := range s.chans.GetTree() {
+		cs := channelToState(ch)
+		_ = c.WriteMessage(protocol.MessageChannelState, cs)
+	}
+	_ = c.WriteMessage(protocol.MessageUserState, userToState(u))
+	for _, ou := range s.users.ListAll() {
+		if ou.SessionID != u.SessionID {
+			_ = c.WriteMessage(protocol.MessageUserState, userToState(ou))
+		}
+	}
+	perms := uint64(s.acl.EffectivePermissions(u.UserID, s.chans.RootID()))
+	_ = c.WriteMessage(protocol.MessageServerSync, &messages.ServerSync{
+		Session:      u.SessionID,
+		MaxBandwidth: uint32(s.cfg.MaxBandwidth),
+		WelcomeText:  s.cfg.WelcomeText,
+		Permissions:  perms,
+	})
+	_ = c.WriteMessage(protocol.MessageServerConfig, &messages.ServerConfig{
+		MaxBandwidth:        uint32(s.cfg.MaxBandwidth),
+		WelcomeText:         s.cfg.WelcomeText,
+		AllowHTML:           true,
+		MessageLength:       5000,
+		MaxUsers:            uint32(s.cfg.MaxUsers),
+	})
+}
+
+func (s *Server) generateCryptSetup() (key, encNonce, decNonce []byte) {
+	if strings.ToLower(s.cfg.SecurityMode) == "secure" {
+		key = make([]byte, 32)
+		rand.Read(key)
+		encNonce = make([]byte, 12)
+		rand.Read(encNonce)
+		decNonce = make([]byte, 12)
+		rand.Read(decNonce)
+		return key, encNonce, decNonce
+	}
+	key = make([]byte, 16)
+	rand.Read(key)
+	encNonce = make([]byte, 16)
+	rand.Read(encNonce)
+	decNonce = make([]byte, 16)
+	rand.Read(decNonce)
+	return key, encNonce, decNonce
+}
+
+func channelToState(ch *mumble.Channel) *messages.ChannelState {
+	return &messages.ChannelState{
+		ChannelID:   ch.ID,
+		Parent:      ch.ParentID,
+		Name:        ch.Name,
+		Description: ch.Description,
+		Position:    ch.Position,
+		MaxUsers:    ch.MaxUsers,
+		Temporary:   ch.IsTemporary,
+		Links:       ch.Links,
+	}
+}
+
+func userToState(u *mumble.User) *messages.UserState {
+	return &messages.UserState{
+		Session:   u.SessionID,
+		UserID:    u.UserID,
+		Name:      u.Name,
+		ChannelID: u.ChannelID,
+		Mute:      u.Mute,
+		Deaf:      u.Deaf,
+		SelfMute:  u.SelfMute,
+		SelfDeaf:  u.SelfDeaf,
+		Texture:   u.Texture,
+		Comment:   u.Comment,
+		// PluginIdentity and PluginContext are not transmitted to clients per Mumble proto.
+	}
+}
+
+func (s *Server) handlePing(msgType protocol.MessageType, payload []byte, ctx interface{}) error {
+	c := ctx.(*connection.Conn)
+	resp := messages.Ping{}
+	if len(payload) > 0 {
+		var p messages.Ping
+		if err := p.Unmarshal(payload); err != nil {
+			return err
+		}
+		resp.Timestamp = p.Timestamp
+	}
+	if resp.Timestamp == 0 {
+		resp.Timestamp = uint64(time.Now().UnixMicro())
+	}
+	resp.Good = c.Crypt.Good
+	resp.Late = c.Crypt.Late
+	resp.Lost = c.Crypt.Lost
+	resp.Resync = c.Crypt.Resync
+	_ = c.WriteMessage(protocol.MessagePing, &resp)
+	return nil
+}
+
+func (s *Server) handleUserRemove(msgType protocol.MessageType, payload []byte, ctx interface{}) error {
+	c := ctx.(*connection.Conn)
+	if c.State() != connection.StateActive {
+		return nil
+	}
+	var ur messages.UserRemove
+	if err := ur.Unmarshal(payload); err != nil {
+		return err
+	}
+	if ur.Session == 0 {
+		return nil
+	}
+	sender, ok := s.users.GetUser(c.SessionID())
+	if !ok {
+		return nil
+	}
+	target, ok := s.users.GetUser(ur.Session)
+	if !ok {
+		return nil
+	}
+	perm := mumble.PermissionKick
+	if ur.Ban {
+		perm = mumble.PermissionBan
+	}
+	if !s.acl.Check(sender.UserID, s.chans.RootID(), perm) {
+		_ = c.WriteMessage(protocol.MessagePermissionDenied, &messages.PermissionDenied{
+			Type: messages.DenyPermission, Reason: "No " + map[bool]string{false: "kick", true: "ban"}[ur.Ban] + " permission",
+		})
+		return nil
+	}
+	ur.Actor = c.SessionID()
+	targetConn := s.conn(ur.Session)
+	s.Broadcast(0, protocol.MessageUserRemove, &ur)
+	if ur.Ban && targetConn != nil {
+		var ip net.IP
+		if addr := targetConn.RemoteAddr(); addr != nil {
+			if host, _, err := net.SplitHostPort(addr.String()); err == nil {
+				ip = net.ParseIP(host)
+			}
+		}
+		if ip != nil {
+			mask := uint32(32)
+			if ip4 := ip.To4(); ip4 != nil {
+				ip = ip4
+			} else {
+				mask = 128
+			}
+			existing := s.bans.List()
+			newBan := messages.BanEntry{
+				Address: ip,
+				Mask:    mask,
+				Name:    target.Name,
+				Reason:  ur.Reason,
+				Start:   time.Now().Format(time.RFC3339),
+			}
+			existing = append(existing, newBan)
+			_ = s.bans.Replace(existing)
+		}
+	}
+	s.users.Remove(ur.Session)
+	s.UnregisterConn(ur.Session)
+	if targetConn != nil {
+		targetConn.Close()
+	}
+	return nil
+}
+
+func (s *Server) handleUserState(msgType protocol.MessageType, payload []byte, ctx interface{}) error {
+	c := ctx.(*connection.Conn)
+	if c.State() != connection.StateActive {
+		return nil
+	}
+	var us messages.UserState
+	if err := us.Unmarshal(payload); err != nil {
+		return err
+	}
+	sender, ok := s.users.GetUser(c.SessionID())
+	if !ok {
+		return nil
+	}
+	// Target: self (Session absent or same as sender) vs another user (admin ops)
+	targetSession := us.Session
+	if us.SetFields&messages.UserStateSetSession == 0 || targetSession == c.SessionID() {
+		targetSession = c.SessionID()
+	}
+	u, ok := s.users.GetUser(targetSession)
+	if !ok {
+		return nil
+	}
+	isAdminOp := targetSession != c.SessionID()
+
+	if us.SetFields&messages.UserStateSetChannelID != 0 && us.ChannelID != 0 {
+		if _, exists := s.chans.GetChannel(us.ChannelID); !exists {
+			return nil
+		}
+		if isAdminOp {
+			if !s.acl.Check(sender.UserID, u.ChannelID, mumble.PermissionMove) {
+				_ = c.WriteMessage(protocol.MessagePermissionDenied, &messages.PermissionDenied{
+					ChannelID: u.ChannelID, Type: messages.DenyPermission, Reason: "No move permission",
+				})
+				return nil
+			}
+		} else if !s.acl.Check(u.UserID, us.ChannelID, mumble.PermissionEnter) {
+			_ = c.WriteMessage(protocol.MessagePermissionDenied, &messages.PermissionDenied{
+				ChannelID: us.ChannelID, Type: messages.DenyPermission, Reason: "Permission denied",
+			})
+			return nil
+		}
+		u.ChannelID = us.ChannelID
+		s.users.SetChannel(targetSession, us.ChannelID)
+		if targetConn := s.conn(targetSession); targetConn != nil {
+			targetConn.SetUser(u.Name, u.UserID, u.ChannelID)
+			if targetSession == c.SessionID() {
+				perms := s.acl.EffectivePermissions(u.UserID, us.ChannelID)
+				_ = targetConn.WriteMessage(protocol.MessagePermissionQuery, &messages.PermissionQuery{
+					ChannelID:   us.ChannelID,
+					Permissions: uint32(perms),
+				})
+			}
+		}
+	}
+	if us.SetFields&messages.UserStateSetSelfMute != 0 {
+		u.SelfMute = us.SelfMute
+	}
+	if us.SetFields&messages.UserStateSetSelfDeaf != 0 {
+		u.SelfDeaf = us.SelfDeaf
+	}
+	if us.SetFields&messages.UserStateSetMute != 0 {
+		if isAdminOp && !s.acl.Check(sender.UserID, u.ChannelID, mumble.PermissionMuteDeafen) {
+			return nil
+		}
+		u.Mute = us.Mute
+	}
+	if us.SetFields&messages.UserStateSetDeaf != 0 {
+		if isAdminOp && !s.acl.Check(sender.UserID, u.ChannelID, mumble.PermissionMuteDeafen) {
+			return nil
+		}
+		u.Deaf = us.Deaf
+	}
+	if us.SetFields&messages.UserStateSetTexture != 0 && len(us.Texture) > 0 {
+		u.Texture = us.Texture
+	}
+	if us.SetFields&messages.UserStateSetComment != 0 {
+		u.Comment = us.Comment
+	}
+	if us.SetFields&messages.UserStateSetPluginIdentity != 0 {
+		u.PluginIdentity = us.PluginIdentity
+	}
+	if us.SetFields&messages.UserStateSetPluginContext != 0 && len(us.PluginContext) > 0 {
+		u.PluginContext = us.PluginContext
+	}
+	state := userToState(u)
+	state.Actor = c.SessionID()
+	s.Broadcast(0, protocol.MessageUserState, state)
+	return nil
+}
+
+func (s *Server) handleCryptSetup(msgType protocol.MessageType, payload []byte, ctx interface{}) error {
+	c := ctx.(*connection.Conn)
+	if c.Crypt == nil {
+		return nil
+	}
+	var cs messages.CryptSetup
+	if len(payload) > 0 {
+		if err := cs.Unmarshal(payload); err != nil {
+			return err
+		}
+	}
+	if len(cs.ClientNonce) > 0 {
+		_ = c.Crypt.SetDecNonce(cs.ClientNonce)
+	}
+	if len(cs.ServerNonce) > 0 || (len(cs.Key) == 0 && len(cs.ClientNonce) == 0) {
+		encNonce := c.Crypt.EncNonce()
+		if len(encNonce) > 0 {
+			_ = c.WriteMessage(protocol.MessageCryptSetup, &messages.CryptSetup{ServerNonce: encNonce})
+		}
+	}
+	return nil
+}
+
+func (s *Server) handleChannelState(msgType protocol.MessageType, payload []byte, ctx interface{}) error {
+	c := ctx.(*connection.Conn)
+	if c.State() != connection.StateActive {
+		return nil
+	}
+	var cs messages.ChannelState
+	if err := cs.Unmarshal(payload); err != nil {
+		return err
+	}
+	u, ok := s.users.GetUser(c.SessionID())
+	if !ok {
+		return nil
+	}
+	if cs.ChannelID == 0 {
+		parent := cs.Parent
+		if parent == 0 {
+			parent = s.chans.RootID()
+		}
+		if !s.acl.Check(u.UserID, parent, mumble.PermissionMakeChannel) {
+			_ = c.WriteMessage(protocol.MessagePermissionDenied, &messages.PermissionDenied{ChannelID: parent, Type: messages.DenyPermission, Reason: "Cannot create channel"})
+			return nil
+		}
+		ch := s.chans.Create(parent, cs.Name, cs.Description, cs.Position, cs.Temporary, cs.MaxUsers)
+		if ch == nil {
+			_ = c.WriteMessage(protocol.MessagePermissionDenied, &messages.PermissionDenied{Type: messages.DenyPermission, Reason: "Cannot create channel"})
+			return nil
+		}
+		state := channelToState(ch)
+		s.Broadcast(0, protocol.MessageChannelState, state)
+		return nil
+	}
+	opts := channel.UpdateOpts{}
+	if cs.Name != "" {
+		opts.Name = &cs.Name
+	}
+	if cs.Description != "" {
+		opts.Description = &cs.Description
+	}
+	if cs.Position != 0 {
+		opts.Position = &cs.Position
+	}
+	if cs.MaxUsers != 0 {
+		opts.MaxUsers = &cs.MaxUsers
+	}
+	opts.Temporary = &cs.Temporary
+	if len(cs.Links) > 0 {
+		opts.Links = cs.Links
+	}
+	if len(cs.LinksAdd) > 0 {
+		opts.LinksAdd = cs.LinksAdd
+	}
+	if len(cs.LinksRemove) > 0 {
+		opts.LinksRemove = cs.LinksRemove
+	}
+	if !s.acl.Check(u.UserID, cs.ChannelID, mumble.PermissionWrite) {
+		_ = c.WriteMessage(protocol.MessagePermissionDenied, &messages.PermissionDenied{ChannelID: cs.ChannelID, Type: messages.DenyPermission})
+		return nil
+	}
+	if s.chans.Update(cs.ChannelID, opts) {
+		if ch, ok := s.chans.GetChannel(cs.ChannelID); ok {
+			s.Broadcast(0, protocol.MessageChannelState, channelToState(ch))
+		}
+	}
+	return nil
+}
+
+func (s *Server) handleChannelRemove(msgType protocol.MessageType, payload []byte, ctx interface{}) error {
+	c := ctx.(*connection.Conn)
+	if c.State() != connection.StateActive {
+		return nil
+	}
+	var cr messages.ChannelRemove
+	if err := cr.Unmarshal(payload); err != nil {
+		return err
+	}
+	u, ok := s.users.GetUser(c.SessionID())
+	if !ok {
+		return nil
+	}
+	if !s.acl.Check(u.UserID, cr.ChannelID, mumble.PermissionWrite) {
+		_ = c.WriteMessage(protocol.MessagePermissionDenied, &messages.PermissionDenied{ChannelID: cr.ChannelID, Type: messages.DenyPermission})
+		return nil
+	}
+	ch, ok := s.chans.GetChannel(cr.ChannelID)
+	if !ok {
+		return nil
+	}
+	parentID := ch.ParentID
+	if parentID == 0 {
+		parentID = s.chans.RootID()
+	}
+	for _, mu := range s.users.ListByChannel(cr.ChannelID) {
+		s.users.SetChannel(mu.SessionID, parentID)
+		mu.ChannelID = parentID
+		if conn := s.conn(mu.SessionID); conn != nil {
+			conn.SetUser(mu.Name, mu.UserID, parentID)
+		}
+		s.Broadcast(0, protocol.MessageUserState, userToState(mu))
+	}
+	if s.chans.Remove(cr.ChannelID) {
+		s.Broadcast(0, protocol.MessageChannelRemove, &cr)
+	}
+	return nil
+}
+
+func (s *Server) handleTextMessage(msgType protocol.MessageType, payload []byte, ctx interface{}) error {
+	c := ctx.(*connection.Conn)
+	if c.State() != connection.StateActive {
+		return nil
+	}
+	var tm messages.TextMessage
+	if err := tm.Unmarshal(payload); err != nil {
+		return err
+	}
+	u, ok := s.users.GetUser(c.SessionID())
+	if !ok {
+		return nil
+	}
+	if !s.checkTextRateLimit(c.SessionID()) {
+		_ = c.WriteMessage(protocol.MessagePermissionDenied, &messages.PermissionDenied{Type: messages.DenyTextTooLong, Reason: "Rate limit exceeded"})
+		return nil
+	}
+	hasTarget := len(tm.Session) > 0 || len(tm.ChannelID) > 0 || len(tm.TreeID) > 0
+	if hasTarget {
+		for _, sid := range tm.Session {
+			targetUser, ok := s.users.GetUser(sid)
+			if !ok {
+				continue
+			}
+			if !s.acl.Check(u.UserID, targetUser.ChannelID, mumble.PermissionTextMessage) {
+				_ = c.WriteMessage(protocol.MessagePermissionDenied, &messages.PermissionDenied{
+					ChannelID: targetUser.ChannelID, Type: messages.DenyPermission, Reason: "No text permission",
+				})
+				return nil
+			}
+		}
+		for _, cid := range tm.ChannelID {
+			if !s.acl.Check(u.UserID, cid, mumble.PermissionTextMessage) {
+				_ = c.WriteMessage(protocol.MessagePermissionDenied, &messages.PermissionDenied{ChannelID: cid, Type: messages.DenyPermission, Reason: "No text permission"})
+				return nil
+			}
+		}
+		for _, tid := range tm.TreeID {
+			if !s.acl.Check(u.UserID, tid, mumble.PermissionTextMessage) {
+				_ = c.WriteMessage(protocol.MessagePermissionDenied, &messages.PermissionDenied{ChannelID: tid, Type: messages.DenyPermission, Reason: "No text permission"})
+				return nil
+			}
+		}
+	} else if !s.acl.Check(u.UserID, u.ChannelID, mumble.PermissionTextMessage) {
+		_ = c.WriteMessage(protocol.MessagePermissionDenied, &messages.PermissionDenied{ChannelID: u.ChannelID, Type: messages.DenyPermission, Reason: "No text permission"})
+		return nil
+	}
+	tm.Actor = c.SessionID()
+	var recipients []uint32
+	if len(tm.Session) > 0 {
+		recipients = append(recipients, tm.Session...)
+	}
+	if len(tm.ChannelID) > 0 {
+		for _, cid := range tm.ChannelID {
+			for _, mu := range s.users.ListByChannel(cid) {
+				recipients = append(recipients, mu.SessionID)
+			}
+		}
+	}
+	if len(tm.TreeID) > 0 {
+		for _, tid := range tm.TreeID {
+			for _, cid := range s.chans.SubtreeIDs(tid) {
+				for _, mu := range s.users.ListByChannel(cid) {
+					recipients = append(recipients, mu.SessionID)
+				}
+			}
+		}
+	}
+	senderSession := c.SessionID()
+	seen := make(map[uint32]bool)
+	for _, sid := range recipients {
+		if sid == senderSession {
+			continue
+		}
+		if !seen[sid] {
+			seen[sid] = true
+			if conn := s.conn(sid); conn != nil {
+				_ = conn.WriteMessage(protocol.MessageTextMessage, &tm)
+			}
+		}
+	}
+	return nil
+}
+
+func (s *Server) checkTextRateLimit(sessionID uint32) bool {
+	v, _ := s.textRateLimiter.LoadOrStore(sessionID, &textRateState{})
+	rs := v.(*textRateState)
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	now := time.Now()
+	if now.Sub(rs.windowAt) > time.Second {
+		rs.windowAt = now
+		rs.count = 0
+	}
+	rs.count++
+	return rs.count <= 30
+}
+
+func (s *Server) conn(sessionID uint32) *connection.Conn {
+	s.connMu.RLock()
+	defer s.connMu.RUnlock()
+	return s.conns[sessionID]
+}
+
+func (s *Server) handleVoiceTarget(msgType protocol.MessageType, payload []byte, ctx interface{}) error {
+	c := ctx.(*connection.Conn)
+	if c.State() != connection.StateActive {
+		return nil
+	}
+	var vt messages.VoiceTarget
+	if err := vt.Unmarshal(payload); err != nil {
+		return err
+	}
+	if vt.ID == 0 || vt.ID > 30 {
+		return nil
+	}
+	var recipients []uint32
+	seen := make(map[uint32]bool)
+	for _, t := range vt.Targets {
+		for _, sid := range t.Session {
+			if !seen[sid] {
+				seen[sid] = true
+				recipients = append(recipients, sid)
+			}
+		}
+		if t.ChannelID != 0 {
+			for _, u := range s.users.ListByChannel(t.ChannelID) {
+				if !seen[u.SessionID] {
+					seen[u.SessionID] = true
+					recipients = append(recipients, u.SessionID)
+				}
+			}
+		}
+		if t.Children {
+			cid := t.ChannelID
+			if cid == 0 {
+				if u, ok := s.users.GetUser(c.SessionID()); ok {
+					cid = u.ChannelID
+				}
+			}
+			for _, subID := range s.chans.SubtreeIDs(cid) {
+				for _, u := range s.users.ListByChannel(subID) {
+					if !seen[u.SessionID] {
+						seen[u.SessionID] = true
+						recipients = append(recipients, u.SessionID)
+					}
+				}
+			}
+		}
+		if t.Links && t.ChannelID != 0 {
+			if ch, ok := s.chans.GetChannel(t.ChannelID); ok {
+				for _, lid := range ch.Links {
+					for _, u := range s.users.ListByChannel(lid) {
+						if !seen[u.SessionID] {
+							seen[u.SessionID] = true
+							recipients = append(recipients, u.SessionID)
+						}
+					}
+				}
+			}
+		}
+	}
+	merged := make(map[uint8][]uint32)
+	if v, ok := s.voiceTargets.Load(c.SessionID()); ok {
+		for k, val := range v.(map[uint8][]uint32) {
+			merged[k] = val
+		}
+	}
+	merged[uint8(vt.ID)] = recipients
+	s.voiceTargets.Store(c.SessionID(), merged)
+	return nil
+}
+
+func (s *Server) handleUDPTunnel(msgType protocol.MessageType, payload []byte, ctx interface{}) error {
+	c := ctx.(*connection.Conn)
+	if c.State() != connection.StateActive || s.router == nil {
+		return nil
+	}
+	if len(payload) < 1 {
+		return nil
+	}
+	target := uint8(payload[0] & 0x1F)
+	sid := c.SessionID()
+	_ = s.router.Route(sid, target, payload)
+	return nil
+}
+
+func (s *Server) handleBanList(msgType protocol.MessageType, payload []byte, ctx interface{}) error {
+	c := ctx.(*connection.Conn)
+	if c.State() != connection.StateActive {
+		return nil
+	}
+	var bl messages.BanList
+	if len(payload) > 0 {
+		_ = bl.Unmarshal(payload)
+	}
+	if !bl.Query && len(bl.Bans) > 0 {
+		u, ok := s.users.GetUser(c.SessionID())
+		if !ok {
+			return nil
+		}
+		if !s.acl.Check(u.UserID, s.chans.RootID(), mumble.PermissionBan) {
+			_ = c.WriteMessage(protocol.MessagePermissionDenied, &messages.PermissionDenied{Type: messages.DenyPermission, Reason: "No ban permission"})
+			return nil
+		}
+		if err := s.bans.Replace(bl.Bans); err != nil {
+			slog.Debug("ban list replace failed", "err", err)
+			return nil
+		}
+	}
+	bl.Bans = s.bans.List()
+	bl.Query = false
+	_ = c.WriteMessage(protocol.MessageBanList, &bl)
+	return nil
+}
+
+func (s *Server) handleACL(msgType protocol.MessageType, payload []byte, ctx interface{}) error {
+	c := ctx.(*connection.Conn)
+	if c.State() != connection.StateActive {
+		return nil
+	}
+	var aclMsg messages.ACL
+	if len(payload) > 0 {
+		_ = aclMsg.Unmarshal(payload)
+	}
+	if aclMsg.ChannelID == 0 {
+		aclMsg.ChannelID = 1
+	}
+	if aclMsg.Query {
+		aclMsg.Query = false
+		aclMsg.InheritACLs = true
+		_ = c.WriteMessage(protocol.MessageACL, &aclMsg)
+	}
+	return nil
+}
+
+func (s *Server) handlePermissionQuery(msgType protocol.MessageType, payload []byte, ctx interface{}) error {
+	c := ctx.(*connection.Conn)
+	if c.State() != connection.StateActive {
+		return nil
+	}
+	var pq messages.PermissionQuery
+	if len(payload) > 0 {
+		_ = pq.Unmarshal(payload)
+	}
+	u, ok := s.users.GetUser(c.SessionID())
+	if !ok {
+		return nil
+	}
+	cid := pq.ChannelID
+	if cid == 0 {
+		cid = u.ChannelID
+	}
+	pq.Permissions = uint32(s.acl.EffectivePermissions(u.UserID, cid))
+	_ = c.WriteMessage(protocol.MessagePermissionQuery, &pq)
+	return nil
+}
+
+func (s *Server) handleRequestBlob(msgType protocol.MessageType, payload []byte, ctx interface{}) error {
+	c := ctx.(*connection.Conn)
+	if c.State() != connection.StateActive {
+		return nil
+	}
+	var rb messages.RequestBlob
+	if len(payload) > 0 {
+		_ = rb.Unmarshal(payload)
+	}
+	s.sendRequestedBlobs(c, &rb)
+	return nil
+}
+
+func (s *Server) sendRequestedBlobs(c *connection.Conn, rb *messages.RequestBlob) {
+	for _, sid := range rb.SessionTexture {
+		if u, ok := s.users.GetUser(sid); ok && len(u.Texture) > 0 {
+			_ = c.WriteMessage(protocol.MessageUserState, &messages.UserState{Session: sid, Texture: u.Texture})
+		}
+	}
+	for _, sid := range rb.SessionComment {
+		if u, ok := s.users.GetUser(sid); ok && u.Comment != "" {
+			_ = c.WriteMessage(protocol.MessageUserState, &messages.UserState{Session: sid, Comment: u.Comment})
+		}
+	}
+	for _, cid := range rb.ChannelDescription {
+		if ch, ok := s.chans.GetChannel(cid); ok && ch.Description != "" {
+			_ = c.WriteMessage(protocol.MessageChannelState, &messages.ChannelState{ChannelID: cid, Description: ch.Description})
+		}
+	}
+}
+
+func (s *Server) handleUserStats(msgType protocol.MessageType, payload []byte, ctx interface{}) error {
+	c := ctx.(*connection.Conn)
+	if c.State() != connection.StateActive {
+		return nil
+	}
+	var req messages.UserStats
+	if len(payload) > 0 {
+		_ = req.Unmarshal(payload)
+	}
+	if req.Session == 0 {
+		req.Session = c.SessionID()
+	}
+	if _, ok := s.users.GetUser(req.Session); ok {
+		_ = c.WriteMessage(protocol.MessageUserStats, &req)
+	}
+	return nil
+}
+
+func (s *Server) handleQueryUsers(msgType protocol.MessageType, payload []byte, ctx interface{}) error {
+	c := ctx.(*connection.Conn)
+	if c.State() != connection.StateActive {
+		return nil
+	}
+	var qu messages.QueryUsers
+	if len(payload) > 0 {
+		_ = qu.Unmarshal(payload)
+	}
+	resp := messages.QueryUsers{}
+	for _, sid := range qu.IDs {
+		if u, ok := s.users.GetUser(sid); ok {
+			resp.Names = append(resp.Names, u.Name)
+		} else {
+			resp.Names = append(resp.Names, "")
+		}
+	}
+	for _, name := range qu.Names {
+		if u, ok := s.users.GetByName(name); ok {
+			resp.IDs = append(resp.IDs, u.SessionID)
+		} else {
+			resp.IDs = append(resp.IDs, 0)
+		}
+	}
+	_ = c.WriteMessage(protocol.MessageQueryUsers, &resp)
+	return nil
+}
+
+func (s *Server) handleUserList(msgType protocol.MessageType, payload []byte, ctx interface{}) error {
+	_ = ctx
+	_ = payload
+	return nil
+}
+
+func (s *Server) handleContextActionModify(msgType protocol.MessageType, payload []byte, ctx interface{}) error {
+	_ = ctx
+	_ = payload
+	return nil
+}
+
+func (s *Server) handleContextAction(msgType protocol.MessageType, payload []byte, ctx interface{}) error {
+	_ = ctx
+	_ = payload
+	return nil
+}
+
+func (s *Server) handlePluginDataTransmission(msgType protocol.MessageType, payload []byte, ctx interface{}) error {
+	_ = ctx
+	_ = payload
+	return nil
+}

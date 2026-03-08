@@ -1,6 +1,6 @@
 # Handler Table Pattern
 
-> **Status:** Design
+> **Status:** Implemented
 
 ## Overview
 
@@ -46,15 +46,22 @@ const (
     MessageCount                   uint16 = 27
 )
 
-type MessageHandler func(data []byte) error
+// MessageHandler receives message type, raw payload, and context (e.g., connection).
+// Use protocol.ReadMessage to unmarshal payload into native message types.
+type MessageHandler func(msgType MessageType, payload []byte, ctx interface{}) error
 
-type HandlerTable [MessageCount]MessageHandler
+// HandlerTable is a slice of handlers indexed by message type. Nil entries are no-ops.
+type HandlerTable []MessageHandler
 
-func (ht *HandlerTable) Dispatch(msgType uint16, data []byte) error {
-    if msgType >= MessageCount || ht[msgType] == nil {
-        return fmt.Errorf("unhandled message type: %d", msgType)
+func NewHandlerTable() HandlerTable {
+    return make(HandlerTable, MessageCount)
+}
+
+func (t HandlerTable) Dispatch(msgType MessageType, payload []byte, ctx interface{}) error {
+    if int(msgType) >= len(t) || t[msgType] == nil {
+        return nil
     }
-    return ht[msgType](data)
+    return t[msgType](msgType, payload, ctx)
 }
 ```
 
@@ -132,7 +139,7 @@ Every TCP packet has a 6-byte header:
 │  Type (uint16)   │  Payload Length (uint32)  │
 │  2 bytes, BE     │  4 bytes, BE             │
 ├──────────────────┴──────────────────────────┤
-│  Protobuf Payload (variable length)         │
+│  Message payload (variable length, native Go wire format) │
 └─────────────────────────────────────────────┘
 ```
 
@@ -141,18 +148,16 @@ The library provides:
 ```go
 package protocol
 
-func ReadPacket(r io.Reader) (msgType uint16, payload []byte, err error)
-func WritePacket(w io.Writer, msgType uint16, payload []byte) error
-func WriteProto(w io.Writer, msgType uint16, msg proto.Message) error
+func ReadPacket(r io.Reader) (msgType MessageType, payload []byte, err error)
+func WritePacket(w io.Writer, msgType MessageType, payload []byte) error
+func WriteMessage(w io.Writer, msgType MessageType, msg Message) error  // marshals via wire encoder
 ```
 
 The read loop (identical for server and client):
 
-1. Read 6-byte header
-2. Parse type and length (big-endian)
-3. Read `length` bytes of payload
-4. Dispatch via handler table
-5. Repeat
+1. Call `protocol.ReadPacket(r)` — reads 6-byte header and payload
+2. Call `table.Dispatch(msgType, payload, ctx)` — dispatches to registered handler
+3. Repeat
 
 ## Message Direction Summary
 

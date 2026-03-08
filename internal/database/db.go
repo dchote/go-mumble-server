@@ -30,7 +30,13 @@ func Open(path string) (*gorm.DB, error) {
 		return nil, err
 	}
 
-	if err := db.AutoMigrate(&models.User{}); err != nil {
+	if err := db.AutoMigrate(
+		&models.User{},
+		&models.VirtualServer{},
+		&models.Channel{},
+		&models.Ban{},
+		&models.ServerConfig{},
+	); err != nil {
 		return nil, err
 	}
 

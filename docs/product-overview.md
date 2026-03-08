@@ -21,7 +21,7 @@ The original Mumble server (Murmur) is a mature C++/Qt application that has serv
 The public Go packages provide the building blocks for any Mumble protocol implementation:
 
 - **`pkg/mumble`** — Core types: `Channel`, `User`, `Permission`, `ACL`, `VoiceTarget`, `TextMessage`. Shared by both client and server code.
-- **`pkg/mumble/proto`** — Generated protobuf types for all Mumble control messages and UDP audio messages.
+- **`pkg/mumble/protocol/messages`** — Native Go structs for all Mumble control messages and UDP audio messages (no protobuf).
 - **`pkg/mumble/protocol`** — Packet framing (read/write with the 6-byte TCP header), message type constants, handler table infrastructure, and varint codec for audio packets.
 - **`pkg/mumble/crypto`** — `CryptState` for UDP voice encryption/decryption. Supports both OCB2-AES128 (legacy) and AES-256-GCM (secure) modes.
 - **`pkg/mumble/audio`** — Audio packet parsing, voice target resolution types, and codec negotiation constants.
@@ -100,7 +100,7 @@ Interactive API documentation is served at `/docs` via Swagger UI.
 
 go-mumble-server targets full compatibility with the Mumble protocol as defined by the upstream project:
 
-- **Control channel** — TCP with TLS, protobuf-encoded messages (27 message types)
+- **Control channel** — TCP with TLS, Mumble protocol messages (27 message types, native Go encoding)
 - **Voice channel** — UDP with AEAD encryption, or tunneled over TCP
 - **Legacy mode** — Compatible with Mumble desktop clients, Plumble (Android), and any client implementing the standard protocol
 - **Secure mode** — Compatible with secure-mode-aware clients only

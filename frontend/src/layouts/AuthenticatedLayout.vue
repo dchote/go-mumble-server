@@ -13,6 +13,7 @@
     <v-navigation-drawer v-model="drawer" :rail="rail" permanent>
       <v-list nav density="comfortable">
         <v-list-item prepend-icon="mdi-view-dashboard" title="Dashboard" to="/" />
+        <v-list-item prepend-icon="mdi-server" title="Servers" to="/servers" />
         <v-list-item v-if="isAdmin" prepend-icon="mdi-account-multiple" title="Users" to="/admin/users" />
       </v-list>
     </v-navigation-drawer>

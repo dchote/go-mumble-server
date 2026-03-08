@@ -1,6 +1,6 @@
 # Security Modes
 
-> **Status:** Design
+> **Status:** Implemented
 
 ## Overview
 
@@ -165,7 +165,7 @@ In secure mode, the `CryptSetup` message carries larger fields:
 | `client_nonce` | 16 bytes | 12 bytes (GCM nonce) |
 | `server_nonce` | 16 bytes | 12 bytes (GCM nonce) |
 
-The `CryptSetup` protobuf message uses `bytes` fields, so the larger key is wire-compatible at the protobuf level. The security mode determines how these fields are interpreted.
+The `CryptSetup` message uses `bytes` fields, so the larger key is wire-compatible. The security mode determines how these fields are interpreted.
 
 ## Local Storage Encryption
 
@@ -241,7 +241,7 @@ func (cs *CryptState) Encrypt(dst, plaintext []byte) []byte
 func (cs *CryptState) Decrypt(dst, ciphertext []byte) ([]byte, error)
 ```
 
-Both server and client code select the mode at initialization. The framing, handler table, and protobuf layers are mode-agnostic.
+Both server and client code select the mode at initialization. The framing, handler table, and message encoding layers are mode-agnostic.
 
 ## Migration Path
 

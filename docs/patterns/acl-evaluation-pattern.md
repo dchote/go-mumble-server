@@ -1,6 +1,6 @@
 # ACL Evaluation Pattern
 
-> **Status:** Design
+> **Status:** Implemented
 
 ## Overview
 

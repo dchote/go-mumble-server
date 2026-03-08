@@ -1,6 +1,6 @@
 # Connection Lifecycle Pattern
 
-> **Status:** Design
+> **Status:** Implemented
 
 ## Overview
 
@@ -152,7 +152,7 @@ A client built on `pkg/mumble/` follows the same state machine but from the oppo
 4. **Authenticate** — Send `Authenticate` with username, password, tokens, and codec support.
 5. **Receive state** — Handle `ChannelState`, `UserState`, `ServerConfig`, `CodecVersion` messages to build local state.
 6. **ServerSync** — Receive `ServerSync` → transition to active.
-7. **Steady state** — Send/receive messages using the same `protocol.ReadPacket` / `protocol.WriteProto` functions.
+7. **Steady state** — Send/receive messages using `protocol.ReadPacket` / `protocol.WriteMessage` (native Go message types).
 8. **Disconnect** — Close the connection; clean up local state.
 
 The protocol library provides the framing, types, and crypto. The client supplies the connection, handler logic, and local state management.
@@ -167,7 +167,7 @@ The protocol library provides the framing, types, and crypto. The client supplie
 | CryptState | `pkg/mumble/crypto` | Server + Client |
 | Audio packet parse/build | `pkg/mumble/audio` | Server + Client |
 | Core types (Channel, User) | `pkg/mumble` | Server + Client |
-| Protobuf messages | `pkg/mumble/proto` | Server + Client |
+| Native Go messages | `pkg/mumble/protocol/messages` | Server + Client |
 
 ## Reference
 

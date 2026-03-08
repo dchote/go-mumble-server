@@ -17,13 +17,33 @@ import (
 	"gorm.io/gorm"
 )
 
+// ConnectedUser is a connected Mumble user for the REST API.
+type ConnectedUser struct {
+	SessionID uint32 `json:"session_id"`
+	UserID    uint32 `json:"user_id"`
+	Name      string `json:"name"`
+	ChannelID uint32 `json:"channel_id"`
+}
+
+// ConnectedUserLister lists connected Mumble users for REST.
+type ConnectedUserLister interface {
+	ListConnected() interface{}
+}
+
 // Router sets up the REST API and optionally serves the embedded SPA.
 func Router(db *gorm.DB, cfg *config.Config, feFS fs.FS) http.Handler {
+	return RouterWithMumble(db, cfg, feFS, nil)
+}
+
+// RouterWithMumble sets up the REST API with optional Mumble connected-user listing.
+func RouterWithMumble(db *gorm.DB, cfg *config.Config, feFS fs.FS, userLister ConnectedUserLister) http.Handler {
 	userSvc := service.NewUserService(db, cfg)
 	authHandler := handler.NewAuthHandler(userSvc, db, cfg)
 	userHandler := handler.NewUserHandler(userSvc)
+	serverHandler := handler.NewServerHandler(db, cfg, userLister)
 
 	r := chi.NewRouter()
+	r.Use(middleware.Logging)
 
 	r.Get("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -44,10 +64,10 @@ func Router(db *gorm.DB, cfg *config.Config, feFS fs.FS) http.Handler {
 
 		r.Group(func(r chi.Router) {
 			r.Use(middleware.Auth(true, db, cfg, userSvc))
-			r.Get("/servers", func(w http.ResponseWriter, r *http.Request) {
-				w.Header().Set("Content-Type", "application/json")
-				w.Write([]byte(`[]`))
-			})
+			r.Get("/status", serverHandler.Status)
+			r.Get("/servers", serverHandler.List)
+			r.Get("/servers/{id}/channels", serverHandler.GetChannels)
+			r.Get("/servers/{id}/users", serverHandler.GetUsers)
 		})
 
 		r.Group(func(r chi.Router) {

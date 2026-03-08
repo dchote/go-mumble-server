@@ -1,5 +1,6 @@
 # Build output
 build/
+go-mumble-server
 dist/
 
 # Go
@@ -43,9 +44,6 @@ Thumbs.db
 # Debug
 __debug_bin*
 *.log
-
-# Generated protobuf (re-generate from source)
-pkg/mumble/proto/*.pb.go
 
 # Research (reference implementations, not part of the project)
 research/

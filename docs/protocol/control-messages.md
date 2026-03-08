@@ -1,16 +1,16 @@
 # Control Messages (TCP)
 
-> **Status:** Reference — derived from `research/mumble/src/Mumble.proto`
+> **Status:** Reference — field layout matches upstream Mumble spec; we use native Go structs, not protobuf
 
 ## Overview
 
-The Mumble control channel uses TCP with TLS. Messages are serialized using Protocol Buffers (proto2) and framed with a 6-byte header.
+The Mumble control channel uses TCP with TLS. Messages use a Mumble-compatible wire format (field-tagged, length-delimited) and are framed with a 6-byte header. go-mumble-server implements this with native Go structs and hand-written wire encoding — no protobuf library.
 
 ## Framing
 
 ```
 ┌──────────────────┬──────────────────────────┬─────────────────────┐
-│  Type (uint16)   │  Payload Length (uint32)  │  Protobuf Payload   │
+│  Type (uint16)   │  Payload Length (uint32)  │  Message Payload    │
 │  2 bytes, BE     │  4 bytes, BE             │  variable length    │
 └──────────────────┴──────────────────────────┴─────────────────────┘
 ```

@@ -8,7 +8,7 @@ The Mumble protocol implementation is a **reusable Go library** (`pkg/mumble/`) 
 
 go-mumble-server re-imagines the Mumble server with modern priorities: a single static binary, zero runtime dependencies, built-in REST management API, and Go's straightforward concurrency model replacing the original's C++/Qt complexity.
 
-**Mumble protocol on TCP/TLS :64738** — Full control channel with protobuf messages.
+**Mumble protocol on TCP/TLS :64738** — Full control channel with native Go message encoding (no protobuf).
 **Voice on UDP :64738** — Low-latency AEAD-encrypted audio with TCP tunnel fallback.
 **REST management API on :9090** — Administration and monitoring with Swagger docs at `/docs`.
 **Web management UI** — Vue 3 + Vuetify frontend embedded in the binary, served alongside the REST API.
@@ -35,8 +35,8 @@ Two **security modes**: **legacy** (100% backward compatible with all Mumble cli
 
 ### Protocol Library
 
-- **Importable as a Go module** — `import "github.com/user/go-mumble-server/pkg/mumble"`
-- **Protobuf types** — Generated types for all 27 control messages and UDP audio messages
+- **Importable as a Go module** — `import "github.com/dchote/go-mumble-server/pkg/mumble"`
+- **Message types** — Native Go structs for all 27 control messages and UDP audio messages (no protobuf dependency)
 - **Packet framing** — Read/write functions for the 6-byte TCP header format
 - **Handler table** — Message dispatch infrastructure usable by both server and client code
 - **CryptState** — AEAD encrypt/decrypt for UDP voice packets (OCB2-AES128 legacy, AES-256-GCM secure)
@@ -50,6 +50,8 @@ Two **security modes**: **legacy** (100% backward compatible with all Mumble cli
 - Node.js 20+ and Yarn (for frontend development)
 
 ## Building
+
+See [docs/build-and-test.md](docs/build-and-test.md) for the full build and test guide.
 
 ### Full build (frontend + server)
 
@@ -70,6 +72,14 @@ Or directly:
 ```bash
 go build -o go-mumble-server ./cmd/go-mumble-server
 ```
+
+### Running tests
+
+```bash
+CGO_ENABLED=1 go test -timeout=30s ./...
+```
+
+Use `-timeout=30s` to avoid hanging. For race detection: `CGO_ENABLED=1 go test -race -timeout=60s ./...`
 
 ## Running
 
@@ -138,38 +148,33 @@ The `pkg/mumble/` packages can be imported by any Go project to build Mumble cli
 
 ```go
 import (
-    "github.com/user/go-mumble-server/pkg/mumble"
-    "github.com/user/go-mumble-server/pkg/mumble/proto"
-    "github.com/user/go-mumble-server/pkg/mumble/protocol"
-    "github.com/user/go-mumble-server/pkg/mumble/crypto"
-    "github.com/user/go-mumble-server/pkg/mumble/audio"
+    "github.com/dchote/go-mumble-server/pkg/mumble/protocol"
+    "github.com/dchote/go-mumble-server/pkg/mumble/protocol/messages"
 )
-```
 
-Example — connecting to a Mumble server and reading packets:
-
-```go
-conn, _ := tls.Dial("tcp", "localhost:64738", &tls.Config{
-    InsecureSkipVerify: true,
+// Connect and send version
+conn, _ := tls.Dial("tcp", "localhost:64738", &tls.Config{InsecureSkipVerify: true})
+protocol.WriteMessage(conn, protocol.MessageVersion, &messages.Version{
+    Release:   "MyBot 1.0",
+    OS:        "linux",
+    OSVersion: "amd64",
 })
 
-// Send version
-protocol.WriteProto(conn, protocol.MessageVersion, &proto.Version{
-    Release: stringPtr("MyBot 1.0"),
-    Opus:    boolPtr(true),
-})
-
-// Read loop using the library's packet framing
+// Read loop — dispatch via handler table
+table := protocol.NewHandlerTable()
+// table[protocol.MessagePing] = func(msgType, payload, ctx) error { ... }
 for {
     msgType, payload, err := protocol.ReadPacket(conn)
     if err != nil {
         break
     }
-    handlers.Dispatch(msgType, payload)
+    table.Dispatch(msgType, payload, conn)
 }
 ```
 
-The library handles framing, protobuf serialization, CryptState for UDP, audio packet parsing, and provides all the core Mumble types. Your code provides the connection management and handler logic.
+The library handles framing, native Go message encoding (no protobuf), CryptState for UDP, audio packet parsing, and provides all the core Mumble types.
+
+**Protocol policy:** Do not use Google protobuf. See [docs/architecture/protocol-encoding.md](docs/architecture/protocol-encoding.md). Your code provides the connection management and handler logic.
 
 See [docs/technical-overview.md](docs/technical-overview.md) for the full package layout and the library/server boundary.
 
@@ -224,7 +229,7 @@ go-mumble-server/
 │   └── yarn.lock
 ├── pkg/
 │   └── mumble/                  # ── Public Protocol Library ──
-│       ├── proto/               # Generated protobuf types
+│       ├── protocol/messages/   # Native Go message structs (no protobuf)
 │       ├── protocol/            # Packet framing, message types, handler table
 │       ├── crypto/              # CryptState (legacy + secure modes)
 │       ├── audio/               # Audio packets, varint, codec IDs
@@ -242,7 +247,6 @@ go-mumble-server/
 │   ├── channel/                 # Channel tree state
 │   ├── user/                    # User session lifecycle
 │   ├── acl/                     # ACL evaluation engine
-│   ├── text/                    # Text message dispatch
 │   ├── ban/                     # Ban list management
 │   ├── config/                  # Configuration loading
 │   ├── database/                # SQLite persistence
@@ -267,7 +271,7 @@ go-mumble-server/
 
 ### Protocol
 
-- [Control Messages](docs/protocol/control-messages.md) — TCP protobuf message catalog (types 0–26)
+- [Control Messages](docs/protocol/control-messages.md) — TCP message catalog (types 0–26)
 - [Voice Data](docs/protocol/voice-data.md) — UDP audio packet format and routing
 - [Security Modes](docs/protocol/security-modes.md) — Legacy vs secure mode design
 - [Encryption](docs/protocol/encryption.md) — TLS, AEAD ciphers, password hashing, storage encryption

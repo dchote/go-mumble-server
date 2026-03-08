@@ -1,6 +1,6 @@
 # Technical Overview
 
-> **Status:** Pre-implementation — architecture and design phase
+> **Status:** Implementation in progress — protocol library complete; server implements core Mumble protocol (connection lifecycle, authentication, channels, users, text messaging, voice routing, ACLs, bans). REST API, web UI, and persistence functional. Full ACL inheritance and advanced features in progress.
 
 go-mumble-server is a native Go implementation of the Mumble voice chat server, built on a reusable protocol library. This document describes the planned architecture, subsystems, and design decisions.
 
@@ -9,7 +9,7 @@ go-mumble-server is a native Go implementation of the Mumble voice chat server, 
 | Component | Technology |
 |-----------|-----------|
 | Language | Go 1.24+ |
-| Protocol serialization | Protocol Buffers (protobuf) |
+| Protocol serialization | Native Go structs with hand-written wire encoding (no protobuf) |
 | Audio codec | Opus (primary), CELT (compatibility) |
 | UDP encryption | OCB2-AES128 (legacy mode) / AES-256-GCM (secure mode) |
 | TLS | Go standard library `crypto/tls` |
@@ -39,9 +39,9 @@ The project is organized into two layers:
 │              pkg/mumble  (Protocol Library)              │
 │                                                         │
 │  ┌───────────┐ ┌──────────┐ ┌──────────┐ ┌───────────┐ │
-│  │  proto     │ │ protocol │ │  crypto  │ │   audio   │ │
-│  │ (protobuf) │ │ (framing │ │ (OCB128, │ │ (packets, │ │
-│  │           │ │  handler  │ │  AES-GCM │ │  varint,  │ │
+│  │ messages  │ │ protocol │ │  crypto  │ │   audio   │ │
+│  │ (native   │ │ (framing │ │ (OCB128, │ │ (packets, │ │
+│  │  Go + wire)│ │ handler  │ │  AES-GCM │ │  varint,  │ │
 │  │           │ │  table)   │ │          │ │  codecs)  │ │
 │  └───────────┘ └──────────┘ └──────────┘ └───────────┘ │
 │  ┌───────────────────────────────────────────────────┐  │
@@ -86,9 +86,9 @@ The project is organized into two layers:
 │  │  │ Channel    │ │ User     │ │ ACL / Permission     │ │  │
 │  │  │ Manager    │ │ Manager  │ │ Evaluator            │ │  │
 │  │  └────────────┘ └──────────┘ └──────────────────────┘ │  │
-│  │  ┌────────────┐ ┌──────────┐ ┌──────────────────────┐ │  │
-│  │  │ Audio      │ │ Text     │ │ Ban                  │ │  │
-│  │  │ Router     │ │ Dispatch │ │ Manager              │ │  │
+│  │  ┌────────────┐ ┌──────────────────────┐ │  │
+│  │  │ Audio      │ │ Ban                  │ │  │
+│  │  │ Router     │ │ Manager              │ │  │
 │  │  └────────────┘ └──────────┘ └──────────────────────┘ │  │
 │  │  ┌────────────┐ ┌──────────┐ ┌──────────────────────┐ │  │
 │  │  │ Crypto     │ │ Config   │ │ Virtual Server       │ │  │
@@ -112,13 +112,13 @@ The project is organized into two layers:
 
 go-mumble-server binds three network interfaces:
 
-1. **Mumble TCP/TLS** (default `:64738`) — Control channel for protobuf messages. Handles connection setup, authentication, channel/user state synchronization, text messaging, and ACL management.
+1. **Mumble TCP/TLS** (default `:64738`) — Control channel for Mumble protocol messages (native Go encoding). Handles connection setup, authentication, channel/user state synchronization, text messaging, and ACL management.
 
 2. **Mumble UDP** (default `:64738`) — Voice data channel. AEAD-encrypted audio packets (OCB2-AES128 in legacy mode, AES-256-GCM in secure mode). Same port as TCP per Mumble protocol convention.
 
 3. **REST API + Web UI** (default `:9090`) — HTTP management interface with Swagger docs at `/docs` and an embedded Vue 3 + Vuetify management frontend. Used for administration, monitoring, and integration.
 
-### Planned Package Layout
+### Package Layout
 
 ```
 go-mumble-server/
@@ -142,8 +142,9 @@ go-mumble-server/
 │   └── vite.config.js
 ├── pkg/
 │   └── mumble/                  # ── Public Protocol Library ──
-│       ├── proto/               # Generated protobuf (Mumble.proto, MumbleUDP.proto)
-│       ├── protocol/            # Packet framing, message type IDs, handler table
+│       ├── protocol/messages/   # Native Go message structs (no protobuf)
+│       ├── protocol/            # Packet framing, message type IDs, handler table, wire encoding
+│       ├── protocol/wire/       # Hand-written Mumble-compatible wire encoder
 │       ├── crypto/              # CryptState: OCB2-AES128 (legacy) + AES-256-GCM (secure)
 │       ├── audio/               # Audio packet parsing, varint codec, codec IDs
 │       ├── channel.go           # Channel type definition
@@ -156,16 +157,20 @@ go-mumble-server/
 │       └── ban.go               # BanEntry type definition
 ├── internal/                    # ── Server-Only Implementation ──
 │   ├── server/                  # Virtual server lifecycle, Meta
-│   ├── transport/               # TCP/TLS and UDP listeners, connection management
+│   ├── mumble/                  # Mumble protocol handler orchestration, per-vserver
+│   ├── connection/              # Per-connection state, TLS, CryptState, read loop
+│   ├── transport/               # TCP/TLS and UDP listeners
+│   ├── handler/                 # REST API handlers
 │   ├── audio/                   # Audio routing, fan-out, receiver grouping
 │   ├── channel/                 # Channel tree state, linking, listeners
-│   ├── user/                    # User session lifecycle, authentication, registration
+│   ├── user/                    # User session lifecycle
+│   ├── auth/                    # Authentication, registration, certificate validation
 │   ├── acl/                     # ACL evaluation engine, group resolution, caching
-│   ├── text/                    # Text message dispatch, filtering, rate limiting
 │   ├── ban/                     # Ban list management, autoban
 │   ├── config/                  # Configuration loading and validation
 │   ├── database/                # SQLite persistence layer
-│   └── rest/                    # REST API router, handlers, middleware
+│   ├── discovery/               # mDNS server discovery
+│   └── rest/                    # REST API router, SPA serving, middleware
 ├── api/
 │   └── openapi.yaml             # OpenAPI 3.0 specification
 ├── configs/
@@ -181,7 +186,7 @@ The boundary is drawn by a single question: **does this code need server state?*
 
 | Goes in `pkg/mumble/` | Goes in `internal/` |
 |------------------------|---------------------|
-| Protobuf types and generation | TCP/UDP listener management |
+| Native Go message structs | TCP/UDP listener management |
 | Packet framing (read/write) | Connection accept loops |
 | Message type constants | Audio routing and fan-out |
 | Handler table infrastructure | Channel tree state management |
@@ -207,7 +212,7 @@ A client connection follows this sequence:
 5. **Authentication** — Client sends `Authenticate` with username, password, tokens, and codec list.
 6. **State sync** — Server sends full channel tree (`ChannelState`), all connected users (`UserState`), and server configuration (`ServerConfig`).
 7. **Server sync** — Server sends `ServerSync` with the client's session ID, welcome text, and permissions. Client is now fully connected.
-8. **Steady state** — Bidirectional protobuf messages on TCP; voice on UDP (or tunneled via `UDPTunnel` on TCP).
+8. **Steady state** — Bidirectional protocol messages on TCP; voice on UDP (or tunneled via `UDPTunnel` on TCP).
 9. **Disconnect** — TCP close or timeout. Server broadcasts `UserRemove`.
 
 See [patterns/connection-lifecycle-pattern.md](patterns/connection-lifecycle-pattern.md).
@@ -216,7 +221,7 @@ See [patterns/connection-lifecycle-pattern.md](patterns/connection-lifecycle-pat
 
 Messages are dispatched by their 16-bit type ID using a handler table — an array of handler functions indexed by message type. This mirrors the pattern used in gumble and the original Murmur.
 
-TCP packet framing: 6-byte header (big-endian uint16 type + uint32 length), followed by the protobuf payload.
+TCP packet framing: 6-byte header (big-endian uint16 type + uint32 length), followed by the message payload (Mumble-compatible wire format, encoded by our hand-written wire layer).
 
 See [protocol/control-messages.md](protocol/control-messages.md) for the full message catalog.
 
@@ -385,10 +390,11 @@ Key configuration areas:
 
 - [Product Overview](product-overview.md) — Project vision and feature summary
 - **Technical Overview** — This document
+- [Protocol Encoding](architecture/protocol-encoding.md) — Native Go messages, no protobuf (contributors: do not add protobuf)
 
 ### Protocol
 
-- [Control Messages](protocol/control-messages.md) — TCP protobuf message catalog (types 0–25)
+- [Control Messages](protocol/control-messages.md) — TCP message catalog (types 0–26)
 - [Voice Data](protocol/voice-data.md) — UDP audio packet format and routing
 - [Security Modes](protocol/security-modes.md) — Legacy vs secure mode design
 - [Encryption](protocol/encryption.md) — TLS, AEAD ciphers, password hashing, storage encryption
@@ -419,6 +425,7 @@ Key configuration areas:
 | TOML configuration | Human-friendly, well-supported in Go ecosystem |
 | `internal/` for server logic | Enforces encapsulation; public API only via `pkg/mumble/` and REST |
 | Core types in library | `Channel`, `User`, `Permission`, `ACL` live in `pkg/` so clients have the same vocabulary as the server |
+| **No Google protobuf** | Protocol uses native Go structs and hand-written wire encoding. Do not add `google.golang.org/protobuf` or protoc-generated code. |
 | Vue 3 + Vuetify frontend | Material Design UI with rich component library; Vuetify provides accessible, responsive components out of the box |
 | Embedded frontend via `//go:embed` | Single binary deployment; no separate web server needed; same binary serves both API and UI |
 | Vite with single-bundle build | `importMode: 'sync'` produces a single JS bundle, avoiding chunk 404 issues when served by the Go SPA handler |
@@ -429,7 +436,7 @@ Key configuration areas:
 | Resource | Path / URL |
 |----------|-----------|
 | Mumble (Murmur) server | `research/mumble/src/murmur/` |
-| Mumble protobuf definitions | `research/mumble/src/Mumble.proto`, `research/mumble/src/MumbleUDP.proto` |
+| Mumble protocol reference | `research/mumble/src/Mumble.proto`, `research/mumble/src/MumbleUDP.proto` (reference only; we use native Go, not protobuf) |
 | Mumble server config reference | `research/mumble/auxiliary_files/mumble-server.ini` |
 | gumble Go client library | `research/gumble/` |
 | Mumble protocol documentation | `research/mumble/docs/dev/network-protocol/` |

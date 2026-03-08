@@ -1,6 +1,6 @@
 # Channel Tree Pattern
 
-> **Status:** Design
+> **Status:** Implemented
 
 ## Overview
 
