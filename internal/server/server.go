@@ -12,8 +12,10 @@ import (
 	"sync"
 	"time"
 
+	"github.com/dchote/go-mumble-server/internal/cert"
 	"github.com/dchote/go-mumble-server/internal/config"
 	"github.com/dchote/go-mumble-server/internal/connection"
+	"github.com/dchote/go-mumble-server/internal/database"
 	"github.com/dchote/go-mumble-server/internal/discovery"
 	"github.com/dchote/go-mumble-server/internal/mumble"
 	"github.com/dchote/go-mumble-server/internal/rest"
@@ -44,12 +46,21 @@ func New(cfg *config.Config, db *gorm.DB, feFS fs.FS) *Server {
 
 // Start begins accepting Mumble and REST connections.
 func (s *Server) Start(ctx context.Context) error {
+	if err := database.EnsureDefaultVirtualServer(s.db, "Default", s.cfg.Host, s.cfg.MumblePort, s.cfg.MaxUsers, s.cfg.WelcomeText); err != nil {
+		return fmt.Errorf("ensure default virtual server: %w", err)
+	}
+
 	var certPEM, keyPEM []byte
+	var err error
 	if s.cfg.SSLCertPath != "" && s.cfg.SSLKeyPath != "" {
-		var err error
 		certPEM, keyPEM, err = transport.LoadOrGenerateCert(s.cfg.SSLCertPath, s.cfg.SSLKeyPath)
 		if err != nil {
 			return err
+		}
+	} else {
+		certPEM, keyPEM, err = cert.GetOrCreateCertForVirtualServer(s.db, 1)
+		if err != nil {
+			return fmt.Errorf("load or create cert for virtual server: %w", err)
 		}
 	}
 

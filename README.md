@@ -109,8 +109,8 @@ Configuration is loaded from (in order of precedence): command-line flags, envir
 | `host` | 0.0.0.0 | Bind address |
 | `database` | mumble-server.sqlite | SQLite database path |
 | `security-mode` | legacy | Security mode: `legacy` or `secure` |
-| `ssl-cert` | | TLS certificate (PEM) |
-| `ssl-key` | | TLS private key (PEM) |
+| `tls.cert` | | TLS certificate (PEM), under `[tls]` |
+| `tls.key` | | TLS private key (PEM), under `[tls]` |
 | `max-users` | 100 | Maximum concurrent users |
 | `max-bandwidth` | 72000 | Maximum bandwidth per user (bps) |
 | `welcome-text` | | Server welcome message (HTML) |

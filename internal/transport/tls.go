@@ -26,10 +26,12 @@ func LoadOrGenerateCert(certPath, keyPath string) (certPEM, keyPEM []byte, err e
 		}
 		return certPEM, keyPEM, nil
 	}
-	return generateSelfSigned()
+	return GenerateSelfSigned()
 }
 
-func generateSelfSigned() (certPEM, keyPEM []byte, err error) {
+// GenerateSelfSigned creates a new self-signed TLS certificate and private key.
+// Used when persisting certs to the database for virtual servers.
+func GenerateSelfSigned() (certPEM, keyPEM []byte, err error) {
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		return nil, nil, err

@@ -6,6 +6,7 @@ import (
 	"strconv"
 
 	"github.com/dchote/go-mumble-server/internal/config"
+	"github.com/dchote/go-mumble-server/internal/database"
 	"github.com/dchote/go-mumble-server/internal/database/models"
 	"github.com/go-chi/chi/v5"
 	"gorm.io/gorm"
@@ -25,22 +26,14 @@ func NewServerHandler(db *gorm.DB, cfg *config.Config, connectedUsers interface{
 
 // List returns all virtual servers. Seeds a default server if none exist.
 func (h *ServerHandler) List(w http.ResponseWriter, r *http.Request) {
+	if err := database.EnsureDefaultVirtualServer(h.db, "Default", h.cfg.Host, h.cfg.MumblePort, h.cfg.MaxUsers, h.cfg.WelcomeText); err != nil {
+		http.Error(w, `{"error":"failed to ensure default server"}`, http.StatusInternalServerError)
+		return
+	}
 	var servers []models.VirtualServer
 	if err := h.db.Find(&servers).Error; err != nil {
 		http.Error(w, `{"error":"failed to list servers"}`, http.StatusInternalServerError)
 		return
-	}
-	if len(servers) == 0 {
-		s := models.VirtualServer{
-			ID:       1,
-			Name:     "Default",
-			Host:     h.cfg.Host,
-			Port:     h.cfg.MumblePort,
-			MaxUsers: h.cfg.MaxUsers,
-		}
-		if err := h.db.Create(&s).Error; err == nil {
-			servers = append(servers, s)
-		}
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(servers)

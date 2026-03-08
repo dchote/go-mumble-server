@@ -51,15 +51,21 @@ tlsConfig := &tls.Config{
 
 ### Server Certificate
 
-The server generates a self-signed certificate on first run if none is configured. Clients typically accept self-signed certificates on first connection and pin them (trust-on-first-use / TOFU model).
+The server uses TLS certificates in the following precedence order:
 
-Configuration:
+1. **Configuration files** — If `[tls]` cert and key paths are set, those PEM files are used.
+2. **Database persistence** — If no config paths are set, the certificate and key are loaded from the SQLite database (stored per virtual server in `virtual_servers.cert_pem` and `key_pem`).
+3. **Generate and persist** — If no cert exists in the database, a self-signed certificate is generated and saved for the virtual server so it persists across restarts.
 
-| Setting | Description |
-|---------|-------------|
-| `ssl-cert` | Path to PEM certificate file |
-| `ssl-key` | Path to PEM private key file |
-| `ssl-ca` | Path to CA certificate for client verification |
+This ensures the certificate does not change between server restarts, preserving client trust (trust-on-first-use / TOFU model). Clients that pinned the certificate on first connection will continue to connect after a restart.
+
+Configuration (in `mumble-server.toml`):
+
+| Setting | TOML key | Description |
+|---------|----------|-------------|
+| Certificate | `[tls] cert` | Path to PEM certificate file (overrides DB) |
+| Private key | `[tls] key` | Path to PEM private key file (overrides DB) |
+| CA | `[tls] ca` | Path to CA certificate for client verification |
 
 ### Client Certificates
 

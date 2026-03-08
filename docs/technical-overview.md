@@ -157,6 +157,7 @@ go-mumble-server/
 │       └── ban.go               # BanEntry type definition
 ├── internal/                    # ── Server-Only Implementation ──
 │   ├── server/                  # Virtual server lifecycle, Meta
+│   ├── cert/                    # TLS certificate persistence per virtual server
 │   ├── mumble/                  # Mumble protocol handler orchestration, per-vserver
 │   ├── connection/              # Per-connection state, TLS, CryptState, read loop
 │   ├── transport/               # TCP/TLS and UDP listeners
@@ -287,6 +288,7 @@ SQLite is the primary storage backend, **encrypted at rest** with AES-256 regard
 - ACLs and groups
 - Ban lists
 - Server configuration
+- TLS certificates and keys (per virtual server, for self-signed certs when no config paths are set)
 - Logs
 
 Passwords are always stored as Argon2id hashes internally, even when the server runs in legacy mode (which uses PBKDF2 for the wire authentication check).
