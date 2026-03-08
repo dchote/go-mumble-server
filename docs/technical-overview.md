@@ -18,7 +18,7 @@ go-mumble-server is a native Go implementation of the Mumble voice chat server, 
 | API docs | Swagger / OpenAPI 3.0 served at `/docs` |
 | Frontend | Vue 3, Vuetify 3, Vite, Vue Router, Vuex |
 | Frontend embedding | Go `//go:embed` — frontend dist compiled into binary |
-| Configuration | TOML config file + environment variables + flags |
+| Configuration | TOML bootstrap + SQLite (runtime, editable via REST API and web UI) |
 | Logging | Structured logging (`slog`) |
 
 ## Library / Server Split
@@ -168,7 +168,7 @@ go-mumble-server/
 │   ├── auth/                    # Authentication, registration, certificate validation
 │   ├── acl/                     # ACL evaluation engine, group resolution, caching
 │   ├── ban/                     # Ban list management, autoban
-│   ├── config/                  # Configuration loading and validation
+│   ├── config/                  # Bootstrap (TOML) + DB config loading
 │   ├── database/                # SQLite persistence layer
 │   ├── discovery/               # mDNS server discovery
 │   └── rest/                    # REST API router, SPA serving, middleware
@@ -285,15 +285,19 @@ See [protocol/encryption.md](protocol/encryption.md) and [protocol/security-mode
 
 ### Database
 
-SQLite is the primary storage backend, **encrypted at rest** with AES-256 regardless of protocol security mode. Persisted data includes:
+SQLite is the primary storage backend, **encrypted at rest** with AES-256 regardless of protocol security mode. Tables include:
 
-- Registered users and certificates
-- Channel tree structure
-- ACLs and groups
-- Ban lists
-- Server configuration
-- TLS certificates and keys (per virtual server, for self-signed certs when no config paths are set)
-- Logs
+| Table | Description |
+|-------|-------------|
+| `meta_config` | Global process-level settings (single row) |
+| `server_configs` | Per-virtual-server configuration |
+| `servers` | Virtual server definitions |
+| `channels` | Channel tree structure (root = ID 0) |
+| `channel_acls` | Per-channel ACL entries |
+| `channel_groups` | Per-channel group definitions |
+| `registered_users` | Registered user accounts and certificates |
+| `bans` | Server ban list |
+| `tls_certs` | Per-virtual-server TLS certificates and keys |
 
 Passwords are always stored as Argon2id hashes internally, even when the server runs in legacy mode (which uses PBKDF2 for the wire authentication check).
 
@@ -301,20 +305,24 @@ Passwords are always stored as Argon2id hashes internally, even when the server 
 
 The REST management API runs on a separate HTTP server (default port `9090`):
 
-| Endpoint Group | Description |
-|----------------|-------------|
-| `GET /health` | Server health and readiness |
-| `GET /api/v1/servers` | List virtual servers |
-| `GET /api/v1/servers/:id/channels` | Channel tree |
-| `GET /api/v1/servers/:id/users` | Connected users |
-| `GET /api/v1/servers/:id/bans` | Ban list |
-| `GET /api/v1/servers/:id/acl/:channelId` | Channel ACLs |
-| `GET /api/v1/servers/:id/config` | Server configuration |
-| `GET /docs` | Swagger UI |
-| `GET /api/v1/openapi.yaml` | OpenAPI specification |
-| `GET /` | Web management UI (SPA) |
-
-All management endpoints require authentication (API key or token-based).
+| Endpoint Group | Methods | Description |
+|----------------|---------|-------------|
+| `/health` | GET | Server health and readiness |
+| `/api/v1/servers` | GET, POST | Virtual server CRUD |
+| `/api/v1/servers/:id` | GET, PATCH, DELETE | Single virtual server |
+| `/api/v1/servers/:id/channels` | GET, POST | Channel tree + create |
+| `/api/v1/servers/:id/channels/:channelId` | PATCH, DELETE | Update/delete channel |
+| `/api/v1/servers/:id/channels/:channelId/acl` | GET, PUT | Channel ACLs and groups |
+| `/api/v1/servers/:id/users` | GET | Connected Mumble users |
+| `/api/v1/servers/:id/registered-users` | GET, POST | Registered user CRUD |
+| `/api/v1/servers/:id/registered-users/:userId` | PATCH, DELETE | Single registered user |
+| `/api/v1/servers/:id/bans` | GET, POST | Ban list CRUD |
+| `/api/v1/servers/:id/bans/:banId` | DELETE | Remove a ban |
+| `/api/v1/servers/:id/config` | GET, PATCH | Per-server configuration |
+| `/api/v1/meta/config` | GET, PATCH | Global (meta) configuration |
+| `/docs` | GET | Swagger UI |
+| `/api/v1/openapi.yaml` | GET | OpenAPI specification |
+| `/` | GET | Web management UI (SPA) |
 
 ### Web Management Frontend
 
@@ -369,26 +377,31 @@ The `-frontend-embed=false` flag disables SPA serving so the Go server only serv
 
 ### Configuration
 
-Configuration is loaded from (in order of precedence):
+Configuration uses a **two-tier** model:
 
-1. Command-line flags
-2. Environment variables (`MUMBLE_` prefix)
-3. Configuration file (`mumble-server.toml`)
-4. Defaults
+**Tier 1 — Bootstrap** (TOML file / environment variables / flags):
 
-Key configuration areas:
+Process-level settings needed before the database is open. Loaded with precedence: flags > env vars (`MUMBLE_` prefix) > TOML file > defaults.
 
-| Area | Examples |
-|------|----------|
-| Security | Mode (legacy/secure) |
-| Network | Bind address, Mumble port, REST port |
-| TLS | Certificate, key, CA |
-| Limits | Max users, max bandwidth, message rate limits |
-| Channels | Nesting limit, count limit, name regex |
-| Users | Default channel, username regex, certificate requirement |
-| Database | Path, WAL mode, encryption key |
-| Frontend | Embed on/off (`-frontend-embed`) |
-| Logging | Level, format, output |
+| Setting | Description |
+|---------|-------------|
+| `database.path` | SQLite database file path |
+| `tls.cert`, `tls.key` | TLS certificate and key paths (PEM) |
+| `logging.level` | Log level (`debug`, `info`, `warn`, `error`) |
+| `frontend-embed` (flag only) | Embed the web management UI |
+
+The TOML file (`configs/mumble-server.toml`) also contains initial values for database-backed settings, which seed the database on first run only.
+
+**Tier 2 — Database** (SQLite, editable via REST API and web UI):
+
+All runtime settings are stored in SQLite. Two tables:
+
+| Table | Scope | REST Endpoint | Key Settings |
+|-------|-------|---------------|--------------|
+| `meta_config` | Global (process-level) | `GET/PATCH /api/v1/meta/config` | Security mode, bind address, ports, Bonjour, JWT |
+| `server_configs` | Per-virtual-server | `GET/PATCH /api/v1/servers/:id/config` | Max users, bandwidth, welcome text, password, default channel, cert required, channel limits |
+
+On first start, the TOML/env/flag values seed both tables. Subsequent changes are made through the API or web UI and persist in the database.
 
 ## Documentation Index
 
@@ -428,7 +441,7 @@ Key configuration areas:
 | SQLite for persistence | Zero-config, embedded, sufficient for Mumble server workloads |
 | Separate REST port | Clean separation between Mumble protocol traffic and management |
 | Swagger at `/docs` | Self-documenting API; standard tooling for client generation |
-| TOML configuration | Human-friendly, well-supported in Go ecosystem |
+| TOML bootstrap + SQLite config | TOML for pre-DB settings; SQLite for runtime config editable via API/UI |
 | `internal/` for server logic | Enforces encapsulation; public API only via `pkg/mumble/` and REST |
 | Core types in library | `Channel`, `User`, `Permission`, `ACL` live in `pkg/` so clients have the same vocabulary as the server |
 | **No Google protobuf** | Protocol uses native Go structs and hand-written wire encoding. Do not add `google.golang.org/protobuf` or protoc-generated code. |

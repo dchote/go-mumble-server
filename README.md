@@ -99,23 +99,52 @@ MUMBLE_SECURITY_MODE=secure MUMBLE_PORT=64738 MUMBLE_REST_PORT=9090 ./go-mumble-
 
 ## Configuration
 
-Configuration is loaded from (in order of precedence): command-line flags, environment variables (`MUMBLE_` prefix), configuration file, defaults.
+Configuration uses a **two-tier** model:
+
+1. **Bootstrap** (TOML file / environment variables / flags) — Process-level settings that must be known before the database is open: database path, TLS cert/key paths, log level, and whether to embed the frontend.
+2. **Database** (SQLite) — All other settings are stored in SQLite and editable at runtime via the REST API and web UI. On first run, bootstrap values seed the database tables (`meta_config` for global settings, `server_configs` for per-virtual-server settings).
+
+### Bootstrap settings (TOML / env / flags)
+
+These are loaded from (in order of precedence): command-line flags, environment variables (`MUMBLE_` prefix), TOML file, defaults.
+
+| Setting | Env / Flag | Default | Description |
+|---------|-----------|---------|-------------|
+| Database path | `MUMBLE_DATABASE_PATH` | `mumble-server.sqlite` | SQLite database file |
+| TLS certificate | `MUMBLE_SSL_CERT_PATH` | (auto-generated) | TLS certificate (PEM) |
+| TLS key | `MUMBLE_SSL_KEY_PATH` | (auto-generated) | TLS private key (PEM) |
+| Log level | `MUMBLE_LOG_LEVEL` | `info` | `debug`, `info`, `warn`, `error` |
+| Frontend embed | `-frontend-embed` | `true` | Serve embedded web UI on REST port |
+
+See `configs/mumble-server.toml` for the full TOML template. The TOML file also includes initial values for database-backed settings; these are used only to seed the database on first run.
+
+### Database-backed settings
+
+Managed via REST API (`/api/v1/meta/config`, `/api/v1/servers/:id/config`) and the web UI settings pages.
+
+**Global** (`meta_config` table):
 
 | Setting | Default | Description |
 |---------|---------|-------------|
-| `port` | 64738 | Mumble protocol port (TCP + UDP) |
-| `rest-port` | 9090 | REST API + web UI port |
-| `frontend-embed` | true | Serve embedded web UI on the REST port |
-| `host` | 0.0.0.0 | Bind address |
-| `database` | mumble-server.sqlite | SQLite database path |
-| `security-mode` | legacy | Security mode: `legacy` or `secure` |
-| `tls.cert` | | TLS certificate (PEM), under `[tls]` |
-| `tls.key` | | TLS private key (PEM), under `[tls]` |
-| `max-users` | 100 | Maximum concurrent users |
-| `max-bandwidth` | 72000 | Maximum bandwidth per user (bps) |
-| `welcome-text` | | Server welcome message (HTML) |
-| `server-password` | | Server-wide password |
-| `log-level` | info | Logging level (debug, info, warn, error) |
+| Security mode | `legacy` | `legacy` or `secure` |
+| Host | `0.0.0.0` | Bind address |
+| Mumble port | 64738 | Mumble protocol port (TCP + UDP) |
+| REST port | 9090 | REST API + web UI port |
+| Bonjour | false | mDNS/Bonjour LAN discovery |
+| Register name | `go-mumble-server` | Display name for LAN discovery |
+
+**Per-server** (`server_configs` table):
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| Max users | 100 | Maximum concurrent users |
+| Max bandwidth | 72000 | Maximum bandwidth per user (bps) |
+| Welcome text | | Server welcome message (HTML) |
+| Server password | | Server-wide password |
+| Default channel | 0 | Channel ID for new connections |
+| Cert required | false | Require client certificates |
+| Channel nesting limit | 10 | Maximum channel tree depth |
+| Channel count limit | 1000 | Maximum total channels |
 
 See [docs/technical-overview.md](docs/technical-overview.md) for the full configuration reference.
 
@@ -135,11 +164,29 @@ The management API runs on port 9090 by default. Interactive Swagger documentati
 # Server health
 curl http://localhost:9090/health
 
-# List connected users
-curl http://localhost:9090/api/v1/servers/1/users
+# Virtual servers
+curl http://localhost:9090/api/v1/servers
 
 # Channel tree
 curl http://localhost:9090/api/v1/servers/1/channels
+
+# Connected users
+curl http://localhost:9090/api/v1/servers/1/users
+
+# Server configuration
+curl http://localhost:9090/api/v1/servers/1/config
+
+# Global (meta) configuration
+curl http://localhost:9090/api/v1/meta/config
+
+# Channel ACLs
+curl http://localhost:9090/api/v1/servers/1/channels/0/acl
+
+# Bans
+curl http://localhost:9090/api/v1/servers/1/bans
+
+# Registered users
+curl http://localhost:9090/api/v1/servers/1/registered-users
 ```
 
 ## Using the Protocol Library
@@ -208,10 +255,11 @@ VITE_API_PROXY_TARGET=http://localhost:9090 yarn dev
 go-mumble-server/
 ├── cmd/
 │   ├── go-mumble-server/       # Main entry point + frontend embed
+│   │   ├── main.go
+│   │   ├── embed.go             # //go:embed frontend-dist
+│   │   └── frontend-dist/       # Vite build output (copied by build script)
 │   └── test-client/            # Protocol test client (pkg/mumble, no external deps)
-│       ├── main.go
-│       ├── embed.go             # //go:embed frontend-dist
-│       └── frontend-dist/       # Vite build output (copied by build script)
+│       └── main.go
 ├── frontend/                    # ── Vue 3 + Vuetify Management UI ──
 │   ├── src/
 │   │   ├── components/          # Reusable UI components
@@ -243,15 +291,17 @@ go-mumble-server/
 │       └── ban.go               # BanEntry type
 ├── internal/                    # ── Server Implementation ──
 │   ├── server/                  # Virtual server lifecycle
+│   ├── mumble/                  # Mumble protocol handlers
 │   ├── transport/               # TCP/TLS and UDP listeners
 │   ├── audio/                   # Audio routing and fan-out
-│   ├── channel/                 # Channel tree state
+│   ├── channel/                 # Channel tree state + root ID migration
 │   ├── user/                    # User session lifecycle
-│   ├── acl/                     # ACL evaluation engine
+│   ├── acl/                     # ACL evaluation engine + default seeding
 │   ├── ban/                     # Ban list management
-│   ├── config/                  # Configuration loading
-│   ├── database/                # SQLite persistence
-│   └── rest/                    # REST API handlers + SPA serving
+│   ├── config/                  # Bootstrap (TOML) + DB config loading
+│   ├── database/                # SQLite persistence + models
+│   ├── handler/                 # REST API route handlers
+│   └── rest/                    # REST router + SPA serving
 ├── api/
 │   └── openapi.yaml             # OpenAPI 3.0 specification
 ├── configs/

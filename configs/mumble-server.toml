@@ -1,5 +1,10 @@
-# go-mumble-server configuration
-# Values can reference environment variables: ${ENV_VAR}
+# go-mumble-server bootstrap configuration
+#
+# This file is used for initial seeding only. On first run, values from this file
+# are written to the SQLite database. After that, runtime settings are managed via
+# the REST API (GET/PATCH /api/v1/meta/config, /api/v1/servers/:id/config) or the
+# web management UI. Only database.path, tls.cert, tls.key, logging.level, and
+# frontend-embed (flag) remain in this file permanently.
 
 [security]
 # Protocol security mode: "legacy" (compatible with all Mumble clients) or "secure" (modern crypto)
