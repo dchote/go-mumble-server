@@ -1,0 +1,167 @@
+// Mumble management UI theme
+// Color palette: Flat UI Colors - French (https://flatuicolors.com/palette/fr)
+// Unified blue family: app bar + card headers share Azraq Blue (#4a69bd) / Livid (#6a89cc)
+
+:root {
+  --brand-primary: #4a69bd;
+  --brand-background: #f8f9fa;
+  --brand-500: #4a69bd;
+  --brand-600: #3c6382;
+  --brand-700: #1e3799;
+  --brand-800: #0c2461;
+  --brand-900: #0a3d62;
+  /* Card header gradient: same blue family as app bar (primary) */
+  --brand-header-start: #6a89cc;
+  --brand-header-mid: #9bb5e0;
+  --brand-header-end: #d4e2f2;
+  --brand-border: #b8cfe8;
+}
+
+.v-theme--dark {
+  --brand-border: rgba(106, 137, 204, 0.25);
+  --brand-background: #0a1628;
+}
+
+.v-card {
+  border-radius: 4px !important;
+}
+
+.v-divider {
+  border-color: rgba(var(--v-theme-on-surface), 0.24) !important;
+  border-width: 1px !important;
+}
+
+.v-theme--dark .v-divider {
+  border-color: rgba(var(--v-theme-on-surface), 0.2) !important;
+}
+
+.card-actions {
+  display: flex;
+  justify-content: flex-end;
+  padding-top: 16px;
+  margin-top: 16px;
+  border-top: 1px solid rgba(var(--v-theme-on-surface), 0.08);
+}
+
+.v-theme--dark .card-actions {
+  border-top: 1px solid rgba(var(--v-theme-on-surface), 0.12);
+}
+
+// Brand page card (sharp corners, flat UI)
+.brand-page-card,
+.brand-card {
+  border-radius: 0 !important;
+  transition: all 0.2s ease;
+  border: 1px solid var(--brand-border);
+  border-top: 3px solid var(--brand-500);
+  position: relative;
+  overflow: hidden;
+}
+
+.brand-page-card .v-card-title,
+.brand-card .v-card-title,
+.brand-card-title {
+  color: var(--brand-900);
+  font-weight: 600;
+  display: flex !important;
+  align-items: center !important;
+  padding-top: 16px;
+  padding-bottom: 12px;
+  min-width: 0;
+  flex-wrap: nowrap;
+}
+
+.brand-page-card .v-card-title > .header-truncate,
+.brand-card .v-card-title > .header-truncate {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.brand-page-card > .v-card-title,
+.brand-card > .v-card-title {
+  background: linear-gradient(135deg, var(--brand-header-start) 0%, var(--brand-header-mid) 50%, var(--brand-header-end) 100%);
+}
+
+.brand-card-toolbar {
+  padding: 6px 16px 8px;
+  background: linear-gradient(180deg, rgba(var(--v-theme-on-surface), 0.04) 0%, rgba(var(--v-theme-on-surface), 0.02) 100%);
+  border-radius: 0;
+}
+
+.v-theme--dark .brand-card-toolbar {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.04) 0%, rgba(255, 255, 255, 0.02) 100%);
+}
+
+.brand-card-content-with-toolbar {
+  padding-top: 12px !important;
+}
+
+.brand-page-card .v-card-text:not(.brand-card-content-with-toolbar) {
+  padding-top: 16px !important;
+}
+
+.v-theme--dark .brand-page-card,
+.v-theme--dark .brand-card {
+  border: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+.v-theme--dark .brand-page-card .v-card-title,
+.v-theme--dark .brand-card .v-card-title {
+  color: rgb(var(--v-theme-on-surface));
+}
+
+.v-theme--dark .brand-page-card > .v-card-title,
+.v-theme--dark .brand-card > .v-card-title {
+  background: linear-gradient(135deg, var(--brand-800) 0%, var(--brand-600) 50%, var(--brand-500) 100%);
+}
+
+// Brand dialog card
+.brand-dialog-card {
+  border-radius: 0 !important;
+  transition: all 0.2s ease;
+  border: 1px solid var(--brand-border);
+  border-top: 3px solid var(--brand-500);
+  position: relative;
+  overflow: hidden;
+}
+
+.brand-dialog-card .v-card-title {
+  background: linear-gradient(135deg, var(--brand-header-start) 0%, var(--brand-header-mid) 50%, var(--brand-header-end) 100%);
+  color: var(--brand-900);
+  font-weight: 600;
+}
+
+.v-theme--dark .brand-dialog-card {
+  border: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+.v-theme--dark .brand-dialog-card .v-card-title {
+  background: linear-gradient(135deg, var(--brand-800) 0%, var(--brand-600) 50%, var(--brand-500) 100%);
+  color: rgb(var(--v-theme-on-surface));
+}
+
+.dialog-card-layout {
+  display: flex;
+  flex-direction: column;
+  max-height: calc(100vh - 48px);
+}
+
+.dialog-card-layout--fullscreen {
+  max-height: none;
+  height: 100%;
+}
+
+.dialog-card-content {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  overflow-y: auto;
+  min-height: 0;
+}
+
+.dialog-card-actions {
+  flex-shrink: 0;
+}
+

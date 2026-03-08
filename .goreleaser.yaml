@@ -13,6 +13,8 @@ builds:
       - arm64
     env:
       - CGO_ENABLED=1
+    tags:
+      - embed_frontend
     ldflags:
       - -s -w
       - -X main.version={{ .Version }}

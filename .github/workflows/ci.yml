@@ -1,10 +1,7 @@
 name: CI
 
 on:
-  push:
-    branches: [main]
-  pull_request:
-    branches: [main]
+  workflow_dispatch:
 
 jobs:
   test:
@@ -46,4 +43,4 @@ jobs:
         run: CGO_ENABLED=1 go test -race -v ./...
 
       - name: Build
-        run: CGO_ENABLED=1 go build -o /dev/null ./cmd/go-mumble-server
+        run: CGO_ENABLED=1 go build -tags embed_frontend -o /dev/null ./cmd/go-mumble-server

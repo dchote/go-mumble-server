@@ -1,0 +1,151 @@
+openapi: 3.0.3
+info:
+  title: go-mumble-server REST API
+  version: 0.1.0
+  description: Management API for the Mumble voice chat server
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: JWT token from POST /api/v1/auth/login
+
+paths:
+  /api/v1/auth/status:
+    get:
+      summary: Auth status
+      description: With Authorization header returns user; without returns hasUsers
+      operationId: getAuthStatus
+      responses:
+        '200':
+          description: Status
+  /api/v1/auth/login:
+    post:
+      summary: Login
+      operationId: login
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [username, password]
+              properties:
+                username: { type: string }
+                password: { type: string }
+      responses:
+        '200':
+          description: Returns token and user
+  /api/v1/auth/register:
+    post:
+      summary: Register
+      description: First user becomes admin
+      operationId: register
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [username, password]
+              properties:
+                username: { type: string }
+                password: { type: string, minLength: 8 }
+      responses:
+        '201':
+          description: User created, returns token and user
+  /api/v1/users:
+    get:
+      summary: List users (admin)
+      operationId: listUsersAdmin
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: List of users
+  /api/v1/users/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: integer
+    patch:
+      summary: Update user role (admin)
+      operationId: updateUserRole
+      security:
+        - bearerAuth: []
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                role: { type: string, enum: [admin, user] }
+      responses:
+        '204':
+          description: Updated
+    delete:
+      summary: Delete user (admin)
+      operationId: deleteUser
+      security:
+        - bearerAuth: []
+      responses:
+        '204':
+          description: Deleted
+  /health:
+    get:
+      summary: Health check
+      operationId: getHealth
+      responses:
+        '200':
+          description: Server is healthy
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: ok
+  /api/v1/servers:
+    get:
+      summary: List virtual servers
+      operationId: listServers
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: List of virtual servers
+  /api/v1/servers/{id}/users:
+    get:
+      summary: List connected users
+      operationId: listUsers
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: List of connected users
+  /api/v1/servers/{id}/channels:
+    get:
+      summary: Get channel tree
+      operationId: getChannels
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Channel tree

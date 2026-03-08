@@ -273,6 +273,11 @@ go-mumble-server/
 - [Encryption](docs/protocol/encryption.md) — TLS, AEAD ciphers, password hashing, storage encryption
 - [Permissions](docs/protocol/permissions.md) — Permission bitmask definitions
 
+### Frontend
+
+- [Frontend Guide](docs/patterns/frontend-guide.md) — Vue 3 and Vuetify conventions
+- [UI Style Guidelines](docs/patterns/ui-style-guidelines.md) — Visual design standards
+
 ### Patterns
 
 - [Connection Lifecycle](docs/patterns/connection-lifecycle-pattern.md) — Client connect through disconnect
