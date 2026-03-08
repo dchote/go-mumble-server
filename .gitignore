@@ -1,6 +1,7 @@
 # Build output
 build/
 go-mumble-server
+test-client
 dist/
 
 # Go

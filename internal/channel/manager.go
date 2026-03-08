@@ -33,6 +33,16 @@ func NewManager(db *gorm.DB, serverID uint) *Manager {
 	return m
 }
 
+// Reload re-reads the channel tree from the database. Use when the DB may have
+// been modified outside this manager (e.g. by another process or REST when using
+// a fallback manager).
+func (m *Manager) Reload() {
+	m.mu.Lock()
+	m.tree = make(map[uint32]*channelNode)
+	m.mu.Unlock()
+	m.load()
+}
+
 func (m *Manager) load() {
 	var rows []models.Channel
 	if err := m.db.Where("server_id = ?", m.serverID).Order("position, id").Find(&rows).Error; err != nil {
@@ -47,9 +57,11 @@ func (m *Manager) load() {
 			Position:   0,
 			InheritACL: true,
 		}
-		if err := m.db.Create(&root).Error; err == nil {
+		if err := m.db.Select("ID", "ServerID", "ParentID", "Name", "Position", "InheritACL").Create(&root).Error; err == nil {
 			rows = append(rows, root)
 		}
+	} else {
+		rows = m.fixRootID(rows)
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -64,16 +76,18 @@ func (m *Manager) load() {
 				MaxUsers:    c.MaxUsers,
 				IsTemporary: c.IsTemporary,
 				Links:       c.Links,
+				InheritACL:  c.InheritACL,
 			},
 			Children: nil,
 		}
 		m.tree[uint32(c.ID)] = nc
 	}
 	for _, nc := range m.tree {
-		if nc.ParentID != 0 {
-			if p := m.tree[nc.ParentID]; p != nil {
-				p.Children = append(p.Children, nc)
-			}
+		if nc.ID == 0 {
+			continue // root has no parent
+		}
+		if p := m.tree[nc.ParentID]; p != nil {
+			p.Children = append(p.Children, nc)
 		}
 	}
 	for _, nc := range m.tree {
@@ -81,6 +95,53 @@ func (m *Manager) load() {
 			return nc.Children[i].Position < nc.Children[j].Position
 		})
 	}
+}
+
+// fixRootID migrates the root channel to ID 0 if a pre-existing database has
+// it at a different ID (caused by GORM auto-increment before the Select fix).
+func (m *Manager) fixRootID(rows []models.Channel) []models.Channel {
+	var rootIdx int = -1
+	hasZero := false
+	for i, c := range rows {
+		if c.ParentID == nil {
+			rootIdx = i
+		}
+		if c.ID == 0 {
+			hasZero = true
+		}
+	}
+	if rootIdx == -1 || rows[rootIdx].ID == 0 {
+		return rows // root already at 0 or no root found
+	}
+	if hasZero {
+		return rows // ID 0 already taken by another row; don't migrate
+	}
+
+	oldID := rows[rootIdx].ID
+	newID := uint(0)
+
+	// Use raw SQL: SQLite doesn't allow PK updates through GORM easily.
+	tx := m.db.Begin()
+	// 1. Update children pointing to old root
+	tx.Exec("UPDATE channels SET parent_id = 0 WHERE server_id = ? AND parent_id = ?", m.serverID, oldID)
+	// 2. Update ACLs and groups referencing old root
+	tx.Exec("UPDATE channel_acls SET channel_id = 0 WHERE server_id = ? AND channel_id = ?", m.serverID, oldID)
+	tx.Exec("UPDATE channel_groups SET channel_id = 0 WHERE server_id = ? AND channel_id = ?", m.serverID, oldID)
+	// 3. Change root row ID: insert new, delete old
+	tx.Exec("INSERT INTO channels (id, server_id, parent_id, name, description, position, max_users, is_temporary, inherit_acl, links, created_at, updated_at) SELECT 0, server_id, parent_id, name, description, position, max_users, is_temporary, inherit_acl, links, created_at, updated_at FROM channels WHERE id = ? AND server_id = ?", oldID, m.serverID)
+	tx.Exec("DELETE FROM channels WHERE id = ? AND server_id = ?", oldID, m.serverID)
+	if err := tx.Commit().Error; err != nil {
+		tx.Rollback()
+		return rows
+	}
+
+	// Reload from DB after migration
+	var fixed []models.Channel
+	if err := m.db.Where("server_id = ?", m.serverID).Order("position, id").Find(&fixed).Error; err != nil {
+		return rows
+	}
+	_ = newID // suppress unused
+	return fixed
 }
 
 func ptrToUint32(p *uint) uint32 {
@@ -134,6 +195,49 @@ func (m *Manager) RootID() uint32 {
 	return 0
 }
 
+// ServerID returns the virtual server ID.
+func (m *Manager) ServerID() uint {
+	return m.serverID
+}
+
+// AncestorChain returns channel IDs from the given channel up to root (inclusive).
+// First element is the channel, last is root.
+func (m *Manager) AncestorChain(channelID uint32) []uint32 {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	var chain []uint32
+	cid := channelID
+	for {
+		n, ok := m.tree[cid]
+		if !ok {
+			break
+		}
+		chain = append(chain, cid)
+		if n.ParentID == 0 && cid != 0 {
+			break
+		}
+		if n.ParentID == cid {
+			break
+		}
+		cid = n.ParentID
+		if cid == 0 {
+			break
+		}
+	}
+	return chain
+}
+
+// GetChannelWithMeta returns the channel and its InheritACL. ok is false if not found.
+func (m *Manager) GetChannelWithMeta(channelID uint32) (ch *mumble.Channel, inheritACL bool, ok bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	n, ok := m.tree[channelID]
+	if !ok {
+		return nil, false, false
+	}
+	return n.Channel, n.InheritACL, true
+}
+
 // Create creates a new channel. Returns the channel or nil on error.
 func (m *Manager) Create(parentID uint32, name string, description string, position int32, temporary bool, maxUsers uint32) *mumble.Channel {
 	m.mu.Lock()
@@ -165,6 +269,7 @@ func (m *Manager) Create(parentID uint32, name string, description string, posit
 		MaxUsers:    row.MaxUsers,
 		IsTemporary: row.IsTemporary,
 		Links:       nil,
+		InheritACL:  row.InheritACL,
 	}
 	m.tree[ch.ID] = &channelNode{Channel: ch, Children: nil}
 	if p := m.tree[parentID]; p != nil {

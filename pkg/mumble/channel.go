@@ -11,4 +11,5 @@ type Channel struct {
 	MaxUsers    uint32
 	IsTemporary bool
 	Links       []uint32
+	InheritACL  bool // inherit ACLs from parent; false = override
 }

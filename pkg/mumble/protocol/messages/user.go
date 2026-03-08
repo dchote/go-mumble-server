@@ -133,10 +133,9 @@ type UserState struct {
 
 func (m *UserState) Marshal() ([]byte, error) {
 	var b []byte
-	if m.Session != 0 {
-		b = wire.AppendTag(b, 1, wire.WireVarint)
-		b = wire.AppendVarint(b, uint64(m.Session))
-	}
+	// Always write session (required)
+	b = wire.AppendTag(b, 1, wire.WireVarint)
+	b = wire.AppendVarint(b, uint64(m.Session))
 	if m.Actor != 0 {
 		b = wire.AppendTag(b, 2, wire.WireVarint)
 		b = wire.AppendVarint(b, uint64(m.Actor))
@@ -148,10 +147,9 @@ func (m *UserState) Marshal() ([]byte, error) {
 		b = wire.AppendTag(b, 4, wire.WireVarint)
 		b = wire.AppendVarint(b, uint64(m.UserID))
 	}
-	if m.ChannelID != 0 {
-		b = wire.AppendTag(b, 5, wire.WireVarint)
-		b = wire.AppendVarint(b, uint64(m.ChannelID))
-	}
+	// Always write channel_id (users in root have channel_id=0)
+	b = wire.AppendTag(b, 5, wire.WireVarint)
+	b = wire.AppendVarint(b, uint64(m.ChannelID))
 	if m.Mute {
 		b = wire.AppendTag(b, 6, wire.WireVarint)
 		b = wire.AppendVarint(b, 1)
@@ -214,10 +212,9 @@ func (m *UserState) Marshal() ([]byte, error) {
 	}
 	for _, va := range m.ListeningVolumeAdjustment {
 		var vaBuf []byte
-		if va.ListeningChannel != 0 {
-			vaBuf = wire.AppendTag(vaBuf, 1, wire.WireVarint)
-			vaBuf = wire.AppendVarint(vaBuf, uint64(va.ListeningChannel))
-		}
+		// Always write listening_channel (root is 0)
+		vaBuf = wire.AppendTag(vaBuf, 1, wire.WireVarint)
+		vaBuf = wire.AppendVarint(vaBuf, uint64(va.ListeningChannel))
 		if va.VolumeAdjustment != 0 {
 			vaBuf = wire.AppendTag(vaBuf, 2, wire.WireFixed32)
 			vaBuf = wire.AppendFixed32(vaBuf, wire.Float32bits(va.VolumeAdjustment))

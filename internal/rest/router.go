@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/dchote/go-mumble-server/api"
+	"github.com/dchote/go-mumble-server/internal/channel"
 	"github.com/dchote/go-mumble-server/internal/config"
 	"github.com/dchote/go-mumble-server/internal/handler"
 	"github.com/dchote/go-mumble-server/internal/middleware"
@@ -32,15 +33,25 @@ type ConnectedUserLister interface {
 
 // Router sets up the REST API and optionally serves the embedded SPA.
 func Router(db *gorm.DB, cfg *config.Config, feFS fs.FS) http.Handler {
-	return RouterWithMumble(db, cfg, feFS, nil)
+	return RouterWithMumble(db, cfg, feFS, nil, nil, nil, nil)
 }
 
+// GetChannelManager returns the channel manager for a server ID, or nil.
+// When nil, channel CRUD uses DB only (no live Mumble sync for server 1).
+type GetChannelManager func(serverID uint) *channel.Manager
+
+// OnACLChange is called when ACLs are modified via REST (for cache invalidation).
+type OnACLChange func(serverID uint)
+
 // RouterWithMumble sets up the REST API with optional Mumble connected-user listing.
-func RouterWithMumble(db *gorm.DB, cfg *config.Config, feFS fs.FS, userLister ConnectedUserLister) http.Handler {
+func RouterWithMumble(db *gorm.DB, cfg *config.Config, feFS fs.FS, userLister ConnectedUserLister, getChanMgr GetChannelManager, onACLChange OnACLChange, onChannelMutated handler.OnChannelMutated) http.Handler {
 	userSvc := service.NewUserService(db, cfg)
 	authHandler := handler.NewAuthHandler(userSvc, db, cfg)
 	userHandler := handler.NewUserHandler(userSvc)
-	serverHandler := handler.NewServerHandler(db, cfg, userLister)
+	serverHandler := handler.NewServerHandler(db, cfg, userLister, (func(serverID uint) *channel.Manager)(getChanMgr), onChannelMutated)
+	banHandler := handler.NewBanHandler(db)
+	aclHandler := handler.NewACLHandler(db, onACLChange)
+	regUserHandler := handler.NewRegisteredUserHandler(db)
 
 	r := chi.NewRouter()
 	r.Use(middleware.Logging)
@@ -66,8 +77,26 @@ func RouterWithMumble(db *gorm.DB, cfg *config.Config, feFS fs.FS, userLister Co
 			r.Use(middleware.Auth(true, db, cfg, userSvc))
 			r.Get("/status", serverHandler.Status)
 			r.Get("/servers", serverHandler.List)
+			r.Post("/servers", serverHandler.Create)
+			r.Get("/servers/{id}", serverHandler.Get)
+			r.Patch("/servers/{id}", serverHandler.Update)
+			r.Delete("/servers/{id}", serverHandler.Delete)
+			r.Get("/servers/{id}/config", serverHandler.GetConfig)
+			r.Patch("/servers/{id}/config", serverHandler.UpdateConfig)
 			r.Get("/servers/{id}/channels", serverHandler.GetChannels)
+			r.Post("/servers/{id}/channels", serverHandler.CreateChannel)
+			r.Patch("/servers/{id}/channels/{channelId}", serverHandler.UpdateChannel)
+			r.Delete("/servers/{id}/channels/{channelId}", serverHandler.DeleteChannel)
+			r.Get("/servers/{id}/channels/{channelId}/acl", aclHandler.Get)
+			r.Put("/servers/{id}/channels/{channelId}/acl", aclHandler.Put)
 			r.Get("/servers/{id}/users", serverHandler.GetUsers)
+			r.Get("/servers/{id}/bans", banHandler.List)
+			r.Post("/servers/{id}/bans", banHandler.Create)
+			r.Delete("/servers/{id}/bans/{banId}", banHandler.Delete)
+			r.Get("/servers/{id}/registered-users", regUserHandler.List)
+			r.Post("/servers/{id}/registered-users", regUserHandler.Create)
+			r.Patch("/servers/{id}/registered-users/{userId}", regUserHandler.Update)
+			r.Delete("/servers/{id}/registered-users/{userId}", regUserHandler.Delete)
 		})
 
 		r.Group(func(r chi.Router) {
@@ -76,6 +105,8 @@ func RouterWithMumble(db *gorm.DB, cfg *config.Config, feFS fs.FS, userLister Co
 			r.Get("/users", userHandler.List)
 			r.Patch("/users/{id}", userHandler.Update)
 			r.Delete("/users/{id}", userHandler.Delete)
+			r.Get("/meta/config", serverHandler.GetMetaConfig)
+			r.Patch("/meta/config", serverHandler.UpdateMetaConfig)
 		})
 	})
 

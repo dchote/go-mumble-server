@@ -114,10 +114,12 @@ Sent by the server when a channel is deleted, or by a client requesting deletion
 
 Full or partial channel state. Sent during sync (full state) and on updates (partial).
 
+**Wire format:** `channel_id` is always sent (root = 0). Root omits the `parent` field entirely (proto2 optional — `has_parent()=false` on the client). Non-root channels always include `parent`.
+
 | Field | Type | Description |
 |-------|------|-------------|
-| `channel_id` | uint32 | Channel ID |
-| `parent` | uint32 | Parent channel ID |
+| `channel_id` | uint32 | Channel ID (always sent; root = 0) |
+| `parent` | uint32 | Parent channel ID (omitted for root) |
 | `name` | string | Channel name |
 | `links` | uint32[] | Linked channel IDs |
 | `description` | string | Channel description (HTML) |
@@ -145,13 +147,15 @@ User disconnected or was kicked/banned.
 
 Full or partial user state.
 
+**Wire format:** `session` and `channel_id` are always sent during sync (users in root have `channel_id` 0).
+
 | Field | Type | Description |
 |-------|------|-------------|
-| `session` | uint32 | User session ID |
+| `session` | uint32 | User session ID (always sent) |
 | `actor` | uint32 | Session of the user making changes |
 | `name` | string | Username |
 | `user_id` | uint32 | Registered user ID |
-| `channel_id` | uint32 | Current channel |
+| `channel_id` | uint32 | Current channel (always sent; root = 0) |
 | `mute` | bool | Server-muted |
 | `deaf` | bool | Server-deafened |
 | `suppress` | bool | Suppressed (no speak permission) |

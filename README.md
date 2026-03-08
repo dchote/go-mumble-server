@@ -21,10 +21,10 @@ Two **security modes**: **legacy** (100% backward compatible with all Mumble cli
 
 - **Full Mumble protocol** — All 27 control message types, UDP and TCP voice transport
 - **Opus audio** — Preferred codec with CELT fallback for legacy clients
-- **Channel hierarchy** — Tree structure with linking, temporary channels, and channel listeners
+- **Channel hierarchy** — Tree structure with linking, temporary channels, and channel listeners. Root channel ID is always 0 per Mumble protocol; clients receive full channel tree and user sync (including users in root).
 - **ACL permissions** — Group-based access control with inheritance, tokens, and per-channel overrides
 - **Text messaging** — Private, channel, and tree-wide messages with HTML support
-- **Whisper / voice targets** — Directed audio to specific users, channels, or groups
+- **Whisper / voice targets** — Directed audio to specific users, channels (including root), or groups
 - **User management** — Certificate-based identity, registration, and server passwords
 - **Virtual servers** — Multiple logical servers in a single process
 - **Dual security modes** — Legacy (OCB2-AES128, TLS 1.2+) for compatibility; Secure (AES-256-GCM, TLS 1.3, Argon2id) for modern security
@@ -207,7 +207,8 @@ VITE_API_PROXY_TARGET=http://localhost:9090 yarn dev
 ```
 go-mumble-server/
 ├── cmd/
-│   └── go-mumble-server/       # Main entry point + frontend embed
+│   ├── go-mumble-server/       # Main entry point + frontend embed
+│   └── test-client/            # Protocol test client (pkg/mumble, no external deps)
 │       ├── main.go
 │       ├── embed.go             # //go:embed frontend-dist
 │       └── frontend-dist/       # Vite build output (copied by build script)
@@ -290,6 +291,15 @@ go-mumble-server/
 - [Audio Pipeline](docs/patterns/audio-pipeline-pattern.md) — Voice routing and forwarding
 - [ACL Evaluation](docs/patterns/acl-evaluation-pattern.md) — Permission resolution algorithm
 - [Concurrent State](docs/patterns/concurrent-state-pattern.md) — Goroutine-safe shared state
+
+## Test Client
+
+A test client in `cmd/test-client/` uses `pkg/mumble` (no external Mumble library) to verify channel sync and connectivity:
+
+```bash
+go build -o test-client ./cmd/test-client
+./test-client localhost:64738
+```
 
 ## Client Compatibility
 

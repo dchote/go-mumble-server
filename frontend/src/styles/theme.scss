@@ -117,6 +117,16 @@
   background: linear-gradient(135deg, var(--brand-800) 0%, var(--brand-600) 50%, var(--brand-500) 100%);
 }
 
+// Section card (nested inside BrandCard, e.g. settings forms)
+.brand-section-card {
+  border: 1px solid var(--brand-border);
+  border-radius: 4px;
+}
+
+.v-theme--dark .brand-section-card {
+  border-color: rgba(255, 255, 255, 0.12);
+}
+
 // Brand dialog card
 .brand-dialog-card {
   border-radius: 0 !important;

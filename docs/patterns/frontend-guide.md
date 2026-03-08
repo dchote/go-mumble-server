@@ -21,6 +21,20 @@ frontend/src/
 └── App.vue
 ```
 
+## Layout and Navigation
+
+### List → Detail Pattern
+
+- **Virtual servers**: List (not cards). Click list item → server detail page. Edit button right-aligned in detail header.
+- **Channels**: List/table on server detail. Click channel → channel detail page. "Add Channel" button right-aligned in Channels section header.
+- **Bans, Registered users**: Lists under section headers. "Add ban" / "Register user" right-aligned in each section header.
+
+### Header Rules
+
+- All header content: `d-flex align-center` (vertically center-aligned).
+- Action buttons for tabular data: in the header for that section, right-aligned.
+- Use `v-spacer` before right-aligned buttons.
+
 ## Components vs Pages Structure
 
 Pages stay minimal and use shared components for layout, forms, and dialogs (mirrors recipe-project):
@@ -62,7 +76,7 @@ The Vite config uses `importMode: 'sync'` so route components are statically imp
 - `variant="outlined"`
 - `density="compact"` (or `comfortable` for login/register)
 - `hide-details="auto"`
-- `autocomplete="off"` (except auth: `username`, `current-password`, `new-password`)
+- **`autocomplete` — REQUIRED on every text field**: Use `autocomplete="off"` on all non-auth fields; use `autocomplete="username"`, `autocomplete="current-password"`, or `autocomplete="new-password"` on auth forms only
 - `class="mr-2"` for spacing between inputs
 - `style="max-width: 320px;"` for fixed-width inputs
 
@@ -72,7 +86,7 @@ The Vite config uses `importMode: 'sync'` so route components are statically imp
 <v-form @submit.prevent="handleSubmit">
   <v-alert v-if="error" type="error" density="compact" class="mb-4">{{ error }}</v-alert>
   <div class="mb-4">
-    <v-text-field v-model="name" label="Name" variant="outlined" density="compact" hide-details="auto" />
+    <v-text-field v-model="name" label="Name" variant="outlined" density="compact" hide-details="auto" autocomplete="off" />
   </div>
   <div class="d-flex justify-end mt-4">
     <v-btn variant="text" class="mr-2" @click="cancel">Cancel</v-btn>
@@ -83,7 +97,7 @@ The Vite config uses `importMode: 'sync'` so route components are statically imp
 
 ## Feedback and Confirmations
 
-Never use `alert()` or `confirm()`. Use `v-alert` for feedback and **StandardDialog** for confirmations. Example:
+Never use `alert()` or `confirm()`. Use `v-alert` for feedback and **StandardDialog** for confirmations. All dialogs (create, edit, confirm delete, add ban, register user, etc.) must use StandardDialog with title, default slot for content, and `#actions` slot for buttons. Example:
 
 ```vue
 <StandardDialog v-model="showDeleteDialog" title="Delete user?" max-width="400" :fullscreen="mobile" @close="userToDelete = null">

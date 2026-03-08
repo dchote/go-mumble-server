@@ -131,13 +131,16 @@ func (s *Server) getVoiceTargetRecipients(sessionID uint32, targetID uint8) []ui
 
 // NewServer creates a Mumble protocol server.
 func NewServer(cfg *config.Config, db *gorm.DB, serverID uint, udpConn net.PacketConn) *Server {
+	users := user.NewManager(db, cfg.MaxUsers)
+	chans := channel.NewManager(db, serverID)
+	_ = acl.EnsureDefaultRootACLs(db, serverID)
 	s := &Server{
 		cfg:     cfg,
 		db:      db,
-		users:   user.NewManager(db, cfg.MaxUsers),
-		chans:   channel.NewManager(db, serverID),
+		users:   users,
+		chans:   chans,
 		bans:    ban.NewManager(db, serverID),
-		acl:     &acl.Evaluator{},
+		acl:     acl.NewEvaluator(db, chans, users),
 		table:   protocol.NewHandlerTable(),
 		conns:   make(map[uint32]*connection.Conn),
 		udpConn: udpConn,
@@ -197,8 +200,31 @@ func (s *Server) HandlerTable() protocol.HandlerTable {
 }
 
 // UserManager returns the user manager.
+// ChanManager returns the channel manager for REST API channel CRUD.
+func (s *Server) ChanManager() *channel.Manager {
+	return s.chans
+}
+
 func (s *Server) UserManager() *user.Manager {
 	return s.users
+}
+
+// ACLEvaluator returns the ACL evaluator for cache invalidation.
+func (s *Server) ACLEvaluator() *acl.Evaluator {
+	return s.acl
+}
+
+// BroadcastChannelState broadcasts a channel's state to all connected clients.
+// Used when channels are created/updated via REST so Mumble clients see the changes.
+func (s *Server) BroadcastChannelState(ch *mumble.Channel) {
+	if ch != nil {
+		s.Broadcast(0, protocol.MessageChannelState, channelToState(ch))
+	}
+}
+
+// BroadcastChannelRemove broadcasts a channel removal to all connected clients.
+func (s *Server) BroadcastChannelRemove(channelID uint32) {
+	s.Broadcast(0, protocol.MessageChannelRemove, &messages.ChannelRemove{ChannelID: channelID})
 }
 
 // RegisterConn registers a connection for broadcasting.
@@ -276,11 +302,16 @@ func (s *Server) handleAuthenticate(msgType protocol.MessageType, payload []byte
 	if s.cfg.DefaultChannel > 0 {
 		defaultChan = uint32(s.cfg.DefaultChannel)
 	}
+	userID := uint32(0)
+	if uid, _, found := s.lookupRegisteredUser(authMsg.Username); found {
+		userID = uid
+	}
 	u := &mumble.User{
-		SessionID: 0,
-		UserID:    0,
-		ChannelID: defaultChan,
-		Name:      authMsg.Username,
+		SessionID:    0,
+		UserID:       userID,
+		ChannelID:    defaultChan,
+		Name:         authMsg.Username,
+		AccessTokens: authMsg.Tokens,
 	}
 	if !s.users.Add(u) {
 		return s.sendReject(c, messages.RejectServerFull, "Server full")
@@ -293,6 +324,20 @@ func (s *Server) handleAuthenticate(msgType protocol.MessageType, payload []byte
 	s.Broadcast(u.SessionID, protocol.MessageUserState, userToState(u))
 	slog.Info("Mumble client authenticated", "user", u.Name, "session", u.SessionID, "channel", u.ChannelID)
 	return nil
+}
+
+// lookupRegisteredUser returns UserID for a username on this server's registered_users.
+func (s *Server) lookupRegisteredUser(username string) (userID uint32, passwordHash string, found bool) {
+	var u struct {
+		UserID       int32
+		PasswordHash string
+	}
+	err := s.db.Table("registered_users").Where("server_id = ? AND name = ?", s.chans.ServerID(), username).
+		Select("user_id", "password_hash").First(&u).Error
+	if err != nil {
+		return 0, "", false
+	}
+	return uint32(u.UserID), u.PasswordHash, true
 }
 
 func (s *Server) sendReject(c *connection.Conn, typ messages.RejectType, reason string) error {
@@ -354,9 +399,13 @@ func (s *Server) generateCryptSetup() (key, encNonce, decNonce []byte) {
 }
 
 func channelToState(ch *mumble.Channel) *messages.ChannelState {
+	// Root (ID 0): omit parent field on wire. Murmur does the same — the proto2
+	// `optional` parent field is absent for root so has_parent()=false on the client.
+	hasParent := ch.ID != 0
 	return &messages.ChannelState{
 		ChannelID:   ch.ID,
 		Parent:      ch.ParentID,
+		HasParent:   hasParent,
 		Name:        ch.Name,
 		Description: ch.Description,
 		Position:    ch.Position,
@@ -494,7 +543,7 @@ func (s *Server) handleUserState(msgType protocol.MessageType, payload []byte, c
 	}
 	isAdminOp := targetSession != c.SessionID()
 
-	if us.SetFields&messages.UserStateSetChannelID != 0 && us.ChannelID != 0 {
+	if us.SetFields&messages.UserStateSetChannelID != 0 {
 		if _, exists := s.chans.GetChannel(us.ChannelID); !exists {
 			return nil
 		}
@@ -513,6 +562,7 @@ func (s *Server) handleUserState(msgType protocol.MessageType, payload []byte, c
 		}
 		u.ChannelID = us.ChannelID
 		s.users.SetChannel(targetSession, us.ChannelID)
+		s.acl.InvalidateCache() // @in/@out depend on channel
 		if targetConn := s.conn(targetSession); targetConn != nil {
 			targetConn.SetUser(u.Name, u.UserID, u.ChannelID)
 			if targetSession == c.SessionID() {
@@ -813,12 +863,10 @@ func (s *Server) handleVoiceTarget(msgType protocol.MessageType, payload []byte,
 				recipients = append(recipients, sid)
 			}
 		}
-		if t.ChannelID != 0 {
-			for _, u := range s.users.ListByChannel(t.ChannelID) {
-				if !seen[u.SessionID] {
-					seen[u.SessionID] = true
-					recipients = append(recipients, u.SessionID)
-				}
+		for _, u := range s.users.ListByChannel(t.ChannelID) {
+			if !seen[u.SessionID] {
+				seen[u.SessionID] = true
+				recipients = append(recipients, u.SessionID)
 			}
 		}
 		if t.Children {
@@ -837,7 +885,7 @@ func (s *Server) handleVoiceTarget(msgType protocol.MessageType, payload []byte,
 				}
 			}
 		}
-		if t.Links && t.ChannelID != 0 {
+		if t.Links {
 			if ch, ok := s.chans.GetChannel(t.ChannelID); ok {
 				for _, lid := range ch.Links {
 					for _, u := range s.users.ListByChannel(lid) {
@@ -913,9 +961,6 @@ func (s *Server) handleACL(msgType protocol.MessageType, payload []byte, ctx int
 	if len(payload) > 0 {
 		_ = aclMsg.Unmarshal(payload)
 	}
-	if aclMsg.ChannelID == 0 {
-		aclMsg.ChannelID = 1
-	}
 	if aclMsg.Query {
 		aclMsg.Query = false
 		aclMsg.InheritACLs = true
@@ -937,10 +982,8 @@ func (s *Server) handlePermissionQuery(msgType protocol.MessageType, payload []b
 	if !ok {
 		return nil
 	}
+	// ChannelID 0 = root channel (per Mumble protocol)
 	cid := pq.ChannelID
-	if cid == 0 {
-		cid = u.ChannelID
-	}
 	pq.Permissions = uint32(s.acl.EffectivePermissions(u.UserID, cid))
 	_ = c.WriteMessage(protocol.MessagePermissionQuery, &pq)
 	return nil

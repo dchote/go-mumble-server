@@ -104,10 +104,9 @@ func (m *PermissionDenied) Marshal() ([]byte, error) {
 		b = wire.AppendTag(b, 1, wire.WireVarint)
 		b = wire.AppendVarint(b, uint64(m.Permission))
 	}
-	if m.ChannelID != 0 {
-		b = wire.AppendTag(b, 2, wire.WireVarint)
-		b = wire.AppendVarint(b, uint64(m.ChannelID))
-	}
+	// Always write channel_id (root is 0)
+	b = wire.AppendTag(b, 2, wire.WireVarint)
+	b = wire.AppendVarint(b, uint64(m.ChannelID))
 	if m.Session != 0 {
 		b = wire.AppendTag(b, 3, wire.WireVarint)
 		b = wire.AppendVarint(b, uint64(m.Session))

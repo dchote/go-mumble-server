@@ -334,10 +334,9 @@ func (m *VoiceTarget) Marshal() ([]byte, error) {
 			tb = wire.AppendTag(tb, 1, wire.WireVarint)
 			tb = wire.AppendVarint(tb, uint64(s))
 		}
-		if t.ChannelID != 0 {
-			tb = wire.AppendTag(tb, 2, wire.WireVarint)
-			tb = wire.AppendVarint(tb, uint64(t.ChannelID))
-		}
+		// Always write channel_id (root is 0)
+		tb = wire.AppendTag(tb, 2, wire.WireVarint)
+		tb = wire.AppendVarint(tb, uint64(t.ChannelID))
 		if t.Group != "" {
 			tb = wire.AppendString(tb, 3, t.Group)
 		}
@@ -456,10 +455,9 @@ type PermissionQuery struct {
 
 func (m *PermissionQuery) Marshal() ([]byte, error) {
 	var b []byte
-	if m.ChannelID != 0 {
-		b = wire.AppendTag(b, 1, wire.WireVarint)
-		b = wire.AppendVarint(b, uint64(m.ChannelID))
-	}
+	// Always write channel_id (root is 0)
+	b = wire.AppendTag(b, 1, wire.WireVarint)
+	b = wire.AppendVarint(b, uint64(m.ChannelID))
 	if m.Permissions != 0 {
 		b = wire.AppendTag(b, 2, wire.WireVarint)
 		b = wire.AppendVarint(b, uint64(m.Permissions))
@@ -525,10 +523,9 @@ func (m *ContextAction) Marshal() ([]byte, error) {
 		b = wire.AppendTag(b, 1, wire.WireVarint)
 		b = wire.AppendVarint(b, uint64(m.Session))
 	}
-	if m.ChannelID != 0 {
-		b = wire.AppendTag(b, 2, wire.WireVarint)
-		b = wire.AppendVarint(b, uint64(m.ChannelID))
-	}
+	// Always write channel_id (root is 0)
+	b = wire.AppendTag(b, 2, wire.WireVarint)
+	b = wire.AppendVarint(b, uint64(m.ChannelID))
 	b = wire.AppendString(b, 3, m.Action)
 	return b, nil
 }

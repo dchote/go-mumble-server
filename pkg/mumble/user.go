@@ -6,6 +6,7 @@ type User struct {
 	UserID         uint32
 	ChannelID      uint32
 	Name           string
+	AccessTokens   []string // from Authenticate message, for token groups
 	Mute           bool
 	Deaf           bool
 	Suppress       bool

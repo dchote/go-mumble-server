@@ -45,6 +45,7 @@ func (m *ChannelRemove) Unmarshal(data []byte) error {
 type ChannelState struct {
 	ChannelID         uint32
 	Parent            uint32
+	HasParent         bool   // if true, parent field is sent on wire; root omits parent
 	Name              string
 	Links             []uint32
 	Description       string
@@ -60,11 +61,11 @@ type ChannelState struct {
 
 func (m *ChannelState) Marshal() ([]byte, error) {
 	var b []byte
-	if m.ChannelID != 0 {
-		b = wire.AppendTag(b, 1, wire.WireVarint)
-		b = wire.AppendVarint(b, uint64(m.ChannelID))
-	}
-	if m.Parent != 0 {
+	// Always write channel_id (required; root is 0)
+	b = wire.AppendTag(b, 1, wire.WireVarint)
+	b = wire.AppendVarint(b, uint64(m.ChannelID))
+	// Only write parent for non-root; Murmur omits parent for root (proto2 optional)
+	if m.HasParent {
 		b = wire.AppendTag(b, 2, wire.WireVarint)
 		b = wire.AppendVarint(b, uint64(m.Parent))
 	}
@@ -135,6 +136,7 @@ func (m *ChannelState) Unmarshal(data []byte) error {
 			}
 			b = b[n:]
 			m.Parent = uint32(v)
+			m.HasParent = true
 		case 3:
 			s, n, err := wire.ReadLengthDelimited(b)
 			if err != nil {

@@ -88,7 +88,7 @@ const (
     PermissionBan              Permission = 0x00020000
     PermissionRegister         Permission = 0x00040000
     PermissionSelfRegister     Permission = 0x00080000
-    PermissionResetUserContent Permission = 0x00100000
+    PermissionResetUser Permission = 0x00100000
 )
 
 func (p Permission) Has(check Permission) bool {
@@ -120,7 +120,7 @@ User ID 0 is the SuperUser account:
 
 ## Reference
 
-- Permission definitions: `research/mumble/src/ACL.h` (enum `Perm`)
-- gumble permissions: `research/gumble/gumble/permission.go`
-- ACL evaluation: `research/mumble/src/ACL.cpp` (`ChanACL::hasPermission`)
-- Default ACLs: `research/mumble/src/murmur/ServerDB.cpp` (table creation)
+- Permission definitions: `pkg/mumble/permission.go`
+- Evaluator: `internal/acl/evaluator.go`
+- Default ACLs: `internal/acl/seed.go` (`EnsureDefaultRootACLs`)
+- Murmur: `research/mumble/src/ACL.h` (enum `Perm`), `ACL.cpp` (`ChanACL::hasPermission`), `ServerDB.cpp` (table creation)

@@ -124,11 +124,13 @@ A separate write goroutine (or buffered channel) serializes outbound messages to
 
 After authentication, the server sends the full world state:
 
-1. All `ChannelState` messages (depth-first from root)
-2. All `UserState` messages for connected users
+1. All `ChannelState` messages (depth-first from root). `channel_id` is always emitted (root = 0); root omits the `parent` field (proto2 optional).
+2. All `UserState` messages for connected users. `session` and `channel_id` are always emitted (users in root have `channel_id` 0).
 3. `ServerConfig` with limits and welcome text
 4. `CodecVersion` with negotiated codec
 5. `ServerSync` with the client's session ID, welcome text, and root channel permissions
+
+Clients that build the channel tree and user list from these messages will correctly see the root channel and all users, including those in root.
 
 ### Disconnect Cleanup (Server)
 

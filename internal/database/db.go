@@ -36,6 +36,10 @@ func Open(path string) (*gorm.DB, error) {
 		&models.Channel{},
 		&models.Ban{},
 		&models.ServerConfig{},
+		&models.MetaConfig{},
+		&models.ChannelGroup{},
+		&models.ChannelACL{},
+		&models.RegisteredUser{},
 	); err != nil {
 		return nil, err
 	}

@@ -36,6 +36,10 @@ func (s *Uint32Slice) Scan(value interface{}) error {
 }
 
 // Channel represents a Mumble channel in the channel tree.
+//
+// Root channel: The root (parent_id IS NULL) must have ID 0 per Mumble protocol.
+// When creating the root, use db.Select("ID", ...).Create() so GORM includes ID 0.
+// See docs/patterns/channel-tree-pattern.md.
 type Channel struct {
 	ID          uint         `gorm:"primaryKey" json:"id"`
 	ServerID    uint         `gorm:"index;not null" json:"server_id"`

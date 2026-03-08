@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/dchote/go-mumble-server/internal/cert"
+	"github.com/dchote/go-mumble-server/internal/channel"
 	"github.com/dchote/go-mumble-server/internal/config"
 	"github.com/dchote/go-mumble-server/internal/connection"
 	"github.com/dchote/go-mumble-server/internal/database"
@@ -20,6 +21,7 @@ import (
 	"github.com/dchote/go-mumble-server/internal/mumble"
 	"github.com/dchote/go-mumble-server/internal/rest"
 	"github.com/dchote/go-mumble-server/internal/transport"
+	pkgmumble "github.com/dchote/go-mumble-server/pkg/mumble"
 	"github.com/dchote/go-mumble-server/pkg/mumble/crypto"
 	"github.com/dchote/go-mumble-server/pkg/mumble/protocol"
 	"github.com/dchote/go-mumble-server/pkg/mumble/protocol/messages"
@@ -46,12 +48,26 @@ func New(cfg *config.Config, db *gorm.DB, feFS fs.FS) *Server {
 
 // Start begins accepting Mumble and REST connections.
 func (s *Server) Start(ctx context.Context) error {
-	if err := database.EnsureDefaultVirtualServer(s.db, "Default", s.cfg.Host, s.cfg.MumblePort, s.cfg.MaxUsers, s.cfg.WelcomeText); err != nil {
+	if err := config.EnsureMetaConfig(s.db, s.cfg); err != nil {
+		return fmt.Errorf("ensure meta config: %w", err)
+	}
+	meta, err := config.LoadMetaConfig(s.db)
+	if err != nil {
+		return fmt.Errorf("load meta config: %w", err)
+	}
+	serverCfg, err := config.LoadServerConfig(s.db, 1)
+	if err != nil {
+		return fmt.Errorf("load server config: %w", err)
+	}
+	cfg := config.ConfigForServer(meta, serverCfg, s.cfg)
+	if err := database.EnsureDefaultVirtualServer(s.db, "Default", cfg.Host, cfg.MumblePort, cfg.MaxUsers, cfg.WelcomeText); err != nil {
 		return fmt.Errorf("ensure default virtual server: %w", err)
+	}
+	if err := config.EnsureServerConfig(s.db, 1, cfg); err != nil {
+		return fmt.Errorf("ensure server config: %w", err)
 	}
 
 	var certPEM, keyPEM []byte
-	var err error
 	if s.cfg.SSLCertPath != "" && s.cfg.SSLKeyPath != "" {
 		certPEM, keyPEM, err = transport.LoadOrGenerateCert(s.cfg.SSLCertPath, s.cfg.SSLKeyPath)
 		if err != nil {
@@ -64,10 +80,10 @@ func (s *Server) Start(ctx context.Context) error {
 		}
 	}
 
-	mumbleAddr := formatAddr(s.cfg.Host, s.cfg.MumblePort)
-	restAddr := formatAddr(s.cfg.Host, s.cfg.RESTPort)
+	mumbleAddr := formatAddr(cfg.Host, cfg.MumblePort)
+	restAddr := formatAddr(cfg.Host, cfg.RESTPort)
 
-	tcpLn, err := transport.TCPListener(ctx, mumbleAddr, certPEM, keyPEM, s.cfg.SecurityMode)
+	tcpLn, err := transport.TCPListener(ctx, mumbleAddr, certPEM, keyPEM, cfg.SecurityMode)
 	if err != nil {
 		return err
 	}
@@ -86,8 +102,29 @@ func (s *Server) Start(ctx context.Context) error {
 	s.mu.Unlock()
 	slog.Info("Mumble UDP listening", "addr", mumbleAddr)
 
-	ms := mumble.NewServer(s.cfg, s.db, 1, udpConn)
-	handler := rest.RouterWithMumble(s.db, s.cfg, s.feFS, &rest.MumbleUserAdapter{Manager: ms.UserManager()})
+	ms := mumble.NewServer(cfg, s.db, 1, udpConn)
+	getChanMgr := func(serverID uint) *channel.Manager {
+		if serverID == 1 {
+			return ms.ChanManager()
+		}
+		return nil
+	}
+	onACLChange := func(serverID uint) {
+		if serverID == 1 {
+			ms.ACLEvaluator().InvalidateCache()
+		}
+	}
+	onChannelMutated := func(serverID uint, ch interface{}, channelID uint32, removed bool) {
+		if serverID != 1 {
+			return
+		}
+		if removed {
+			ms.BroadcastChannelRemove(channelID)
+		} else if c, ok := ch.(*pkgmumble.Channel); ok {
+			ms.BroadcastChannelState(c)
+		}
+	}
+	handler := rest.RouterWithMumble(s.db, cfg, s.feFS, &rest.MumbleUserAdapter{Manager: ms.UserManager()}, getChanMgr, onACLChange, onChannelMutated)
 	s.http = &http.Server{
 		Addr:    restAddr,
 		Handler: handler,
@@ -111,12 +148,12 @@ func (s *Server) Start(ctx context.Context) error {
 		return s.udpReadLoop(gctx, udpConn, ms)
 	})
 
-	if s.cfg.Bonjour {
-		name := s.cfg.RegisterName
+	if cfg.Bonjour {
+		name := cfg.RegisterName
 		if name == "" {
 			name = "go-mumble-server"
 		}
-		s.mdns = discovery.NewServer(name, s.cfg.MumblePort)
+		s.mdns = discovery.NewServer(name, cfg.MumblePort)
 		g.Go(func() error {
 			if err := s.mdns.Start(gctx); err != nil {
 				slog.Warn("mDNS discovery failed (continuing without)", "err", err)
@@ -137,8 +174,13 @@ func formatAddr(host string, port int) string {
 }
 
 func (s *Server) acceptLoop(ctx context.Context, ln net.Listener, ms *mumble.Server) error {
+	meta, _ := config.LoadMetaConfig(s.db)
+	securityMode := "legacy"
+	if meta != nil {
+		securityMode = meta.SecurityMode
+	}
 	mode := crypto.ModeLegacy
-	if strings.ToLower(s.cfg.SecurityMode) == "secure" {
+	if strings.ToLower(securityMode) == "secure" {
 		mode = crypto.ModeSecure
 	}
 	for {

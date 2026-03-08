@@ -256,12 +256,16 @@ See [patterns/channel-tree-pattern.md](patterns/channel-tree-pattern.md).
 
 ### ACL Evaluator
 
-Access control uses a layered model:
+Access control uses a layered model, implemented in `internal/acl/evaluator.go`:
 
-1. **Groups** — Named sets of users, defined per-channel with inheritance. Special groups: `all`, `auth`, `in`, `out`, `admin`.
-2. **ACL entries** — Per-channel rules mapping a user or group to granted/denied permissions.
-3. **Inheritance** — ACLs and groups cascade down the channel tree unless explicitly overridden.
-4. **Access tokens** — Clients supply tokens that grant membership in token-based groups.
+1. **Groups** — Named sets of users, defined per-channel with inheritance. Special groups: `all`, `auth`, `in`, `out`, `admin`, `sub`.
+2. **ACL entries** — Per-channel rules mapping a user, group, or token to granted/denied permissions. Supports eval-locality (`EvalHere`, ~) and selector inversion (`Invert`, !).
+3. **Inheritance** — ACLs and groups cascade down the channel tree unless `InheritACL` is false.
+4. **Access tokens** — Clients supply tokens in the Authenticate message; stored on `User.AccessTokens` for token group membership.
+5. **Caching** — Permissions cached per (user, channel); invalidated on ACL change (REST PUT) and user channel move.
+6. **Default ACLs** — Root channel seeded with `all`, `auth`, `admin` rules via `EnsureDefaultRootACLs()`.
+
+SuperUser (user ID 0) always has Write. UserID is resolved from `registered_users` at authenticate.
 
 Permissions are evaluated as a bitmask. See [patterns/acl-evaluation-pattern.md](patterns/acl-evaluation-pattern.md) and [protocol/permissions.md](protocol/permissions.md).
 

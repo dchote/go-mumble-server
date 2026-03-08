@@ -43,7 +43,10 @@ Each ACL entry maps a user or group to a set of granted and denied permissions:
 | `ApplyHere` | Entry applies to this channel |
 | `ApplySubs` | Entry applies to sub-channels |
 | `UserID` | Specific user (mutually exclusive with Group) |
-| `Group` | Group name |
+| `Group` | Group name (or meta: all, auth, in, out, admin, sub) |
+| `AccessToken` | Token for @# token groups |
+| `EvalHere` | ~ prefix: resolve @in/@out/@sub in ACL-definition channel context |
+| `Invert` | ! prefix: invert the selector match |
 | `Grant` | Permission bits to allow |
 | `Deny` | Permission bits to deny |
 
@@ -157,8 +160,18 @@ The root channel (ID 0) has a default ACL:
 
 SuperUser (user ID 0) is always in the `admin` group and always has `Write` permission.
 
+## Implementation
+
+- **Evaluator**: `internal/acl/evaluator.go` — `NewEvaluator(db, chans, users)`, `Check()`, `EffectivePermissions()`, `InvalidateCache()`
+- **Seed**: `internal/acl/seed.go` — `EnsureDefaultRootACLs()` seeds default groups and ACLs for root channel
+- **Models**: `internal/database/models/channel_acl.go`, `channel_group.go`
+- **User**: `pkg/mumble/user.go` — `AccessTokens` for token group membership
+- **Channel**: `pkg/mumble/channel.go` — `InheritACL` for inheritance control
+- **Cache invalidation**: On ACL PUT (via REST), on user channel move; REST handler receives `OnACLChange` callback
+
 ## Reference
 
 - Murmur ACL evaluation: `ChanACL::hasPermission()` in `research/mumble/src/ACL.cpp`
 - Murmur groups: `Group` class in `research/mumble/src/Group.h`
 - gumble ACL: `research/gumble/gumble/acl.go`
+- Mumble ACL guide: https://www.mumble.info/documentation/administration/acl/

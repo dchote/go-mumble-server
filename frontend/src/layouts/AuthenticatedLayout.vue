@@ -15,6 +15,7 @@
         <v-list-item prepend-icon="mdi-view-dashboard" title="Dashboard" to="/" />
         <v-list-item prepend-icon="mdi-server" title="Servers" to="/servers" />
         <v-list-item v-if="isAdmin" prepend-icon="mdi-account-multiple" title="Users" to="/admin/users" />
+        <v-list-item v-if="isAdmin" prepend-icon="mdi-cog" title="Settings" to="/admin/settings" />
       </v-list>
     </v-navigation-drawer>
     <v-main>

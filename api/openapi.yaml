@@ -119,6 +119,135 @@ paths:
       responses:
         '200':
           description: List of virtual servers
+    post:
+      summary: Create virtual server
+      operationId: createServer
+      security:
+        - bearerAuth: []
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name: { type: string }
+                host: { type: string }
+                port: { type: integer }
+                max_users: { type: integer }
+                welcome_text: { type: string }
+      responses:
+        '201':
+          description: Created
+        '400':
+          description: Invalid request
+  /api/v1/servers/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: integer
+    get:
+      summary: Get virtual server
+      operationId: getServer
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Virtual server
+        '404':
+          description: Not found
+    patch:
+      summary: Update virtual server
+      operationId: updateServer
+      security:
+        - bearerAuth: []
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name: { type: string }
+                host: { type: string }
+                port: { type: integer }
+                max_users: { type: integer }
+                welcome_text: { type: string }
+      responses:
+        '200':
+          description: Updated
+        '404':
+          description: Not found
+    delete:
+      summary: Delete virtual server
+      operationId: deleteServer
+      security:
+        - bearerAuth: []
+      responses:
+        '204':
+          description: Deleted
+        '404':
+          description: Not found
+  /api/v1/servers/{id}/bans:
+    get:
+      summary: List bans
+      operationId: listBans
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: List of bans
+    post:
+      summary: Add ban
+      operationId: createBan
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                address: { type: string }
+                hash: { type: string }
+                name: { type: string }
+                reason: { type: string }
+                duration: { type: integer }
+      responses:
+        '201':
+          description: Created
+  /api/v1/servers/{id}/bans/{banId}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: integer
+      - name: banId
+        in: path
+        required: true
+        schema:
+          type: integer
+    delete:
+      summary: Remove ban
+      operationId: deleteBan
+      security:
+        - bearerAuth: []
+      responses:
+        '204':
+          description: Deleted
   /api/v1/servers/{id}/users:
     get:
       summary: List connected users
@@ -149,3 +278,162 @@ paths:
       responses:
         '200':
           description: Channel tree
+    post:
+      summary: Create channel
+      operationId: createChannel
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                parent_id: { type: integer }
+                name: { type: string }
+                description: { type: string }
+                position: { type: integer }
+                is_temporary: { type: boolean }
+                max_users: { type: integer }
+      responses:
+        '201':
+          description: Created
+  /api/v1/servers/{id}/channels/{channelId}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: integer
+      - name: channelId
+        in: path
+        required: true
+        schema:
+          type: integer
+    patch:
+      summary: Update channel
+      operationId: updateChannel
+      security:
+        - bearerAuth: []
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name: { type: string }
+                description: { type: string }
+                position: { type: integer }
+                max_users: { type: integer }
+                is_temporary: { type: boolean }
+                links: { type: array, items: { type: integer } }
+      responses:
+        '204':
+          description: Updated
+    delete:
+      summary: Delete channel
+      operationId: deleteChannel
+      security:
+        - bearerAuth: []
+      responses:
+        '204':
+          description: Deleted
+  /api/v1/servers/{id}/channels/{channelId}/acl:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: integer
+      - name: channelId
+        in: path
+        required: true
+        schema:
+          type: integer
+    get:
+      summary: Get channel ACL and groups
+      operationId: getChannelACL
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: ACL and groups
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  groups:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id: { type: integer }
+                        name: { type: string }
+                        inherit: { type: boolean }
+                        inheritable: { type: boolean }
+                        add_user_ids: { type: array, items: { type: integer } }
+                        remove_user_ids: { type: array, items: { type: integer } }
+                  acls:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id: { type: integer }
+                        priority: { type: integer }
+                        apply_here: { type: boolean }
+                        apply_subs: { type: boolean }
+                        user_id: { type: integer, nullable: true }
+                        group_name: { type: string }
+                        access_token: { type: string }
+                        eval_here: { type: boolean, description: "~ prefix: resolve in ACL-definition channel context" }
+                        invert: { type: boolean, description: "! prefix: invert selector" }
+                        grant: { type: integer, description: "Permission bitmask" }
+                        deny: { type: integer, description: "Permission bitmask" }
+    put:
+      summary: Replace channel ACL and groups
+      operationId: putChannelACL
+      security:
+        - bearerAuth: []
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [groups, acls]
+              properties:
+                groups:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      name: { type: string }
+                      inherit: { type: boolean }
+                      inheritable: { type: boolean }
+                      add_user_ids: { type: array, items: { type: integer } }
+                      remove_user_ids: { type: array, items: { type: integer } }
+                acls:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      priority: { type: integer }
+                      apply_here: { type: boolean }
+                      apply_subs: { type: boolean }
+                      user_id: { type: integer, nullable: true }
+                      group_name: { type: string }
+                      access_token: { type: string }
+                      eval_here: { type: boolean }
+                      invert: { type: boolean }
+                      grant: { type: integer }
+                      deny: { type: integer }
+      responses:
+        '204':
+          description: Updated
