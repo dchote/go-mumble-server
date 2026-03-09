@@ -2,7 +2,10 @@ openapi: 3.0.3
 info:
   title: go-mumble-server REST API
   version: 0.1.0
-  description: Management API for the Mumble voice chat server
+  description: |
+    Management API for the Mumble voice chat server.
+    Many write and sensitive-read operations require the **admin** role (see operation descriptions).
+    Authenticated non-admin users have read-only access to servers, channels, and config; connected users list is returned with sensitive fields (address, certificate_hash) omitted for non-admins.
 
 components:
   schemas:
@@ -35,6 +38,10 @@ components:
         certificate_hash:
           type: string
           description: SHA-1 hex fingerprint of the client's TLS certificate (lowercase); empty if client did not present a certificate. Use for banning by certificate.
+        crypto_mode:
+          type: string
+          description: Negotiated UDP crypto tier (lite, legacy, secure)
+          enum: [lite, legacy, secure]
         self_mute:
           type: boolean
           description: User has muted themselves
@@ -69,6 +76,7 @@ paths:
   /api/v1/auth/login:
     post:
       summary: Login
+      description: Rate limited per IP (20 requests per minute).
       operationId: login
       requestBody:
         required: true
@@ -83,10 +91,12 @@ paths:
       responses:
         '200':
           description: Returns token and user
+        '429':
+          description: Too many requests (rate limited)
   /api/v1/auth/register:
     post:
       summary: Register
-      description: First user becomes admin
+      description: First user becomes admin. Rate limited per IP (20 requests per minute).
       operationId: register
       requestBody:
         required: true
@@ -101,6 +111,8 @@ paths:
       responses:
         '201':
           description: User created, returns token and user
+        '429':
+          description: Too many requests (rate limited)
   /api/v1/users:
     get:
       summary: List users (admin)
@@ -166,6 +178,7 @@ paths:
           description: List of virtual servers
     post:
       summary: Create virtual server
+      description: Requires admin role.
       operationId: createServer
       security:
         - bearerAuth: []
@@ -204,6 +217,7 @@ paths:
           description: Not found
     patch:
       summary: Update virtual server
+      description: Requires admin role.
       operationId: updateServer
       security:
         - bearerAuth: []
@@ -225,6 +239,7 @@ paths:
           description: Not found
     delete:
       summary: Delete virtual server
+      description: Requires admin role.
       operationId: deleteServer
       security:
         - bearerAuth: []
@@ -236,6 +251,7 @@ paths:
   /api/v1/servers/{id}/bans:
     get:
       summary: List bans
+      description: Requires admin role.
       operationId: listBans
       security:
         - bearerAuth: []
@@ -250,6 +266,7 @@ paths:
           description: List of bans
     post:
       summary: Add ban
+      description: Requires admin role.
       operationId: createBan
       security:
         - bearerAuth: []
@@ -287,6 +304,7 @@ paths:
           type: integer
     delete:
       summary: Remove ban
+      description: Requires admin role.
       operationId: deleteBan
       security:
         - bearerAuth: []
@@ -296,7 +314,7 @@ paths:
   /api/v1/servers/{id}/users:
     get:
       summary: List connected users
-      description: Returns Mumble clients connected to this virtual server, with is_admin for RBAC display
+      description: Returns Mumble clients connected to this virtual server. For non-admin callers, address and certificate_hash are omitted. Admin callers receive full data.
       operationId: listUsers
       security:
         - bearerAuth: []
@@ -318,6 +336,7 @@ paths:
   /api/v1/servers/{id}/users/{sessionId}/kick:
     post:
       summary: Kick connected user
+      description: Requires admin role.
       operationId: kickUser
       security:
         - bearerAuth: []
@@ -347,6 +366,7 @@ paths:
   /api/v1/servers/{id}/users/{sessionId}/mute:
     post:
       summary: Mute or unmute connected user
+      description: Requires admin role.
       operationId: muteUser
       security:
         - bearerAuth: []
@@ -377,6 +397,7 @@ paths:
   /api/v1/servers/{id}/users/{sessionId}/ban:
     post:
       summary: Ban and kick connected user
+      description: Requires admin role.
       operationId: banUser
       security:
         - bearerAuth: []
@@ -420,6 +441,7 @@ paths:
           description: Channel tree
     post:
       summary: Create channel
+      description: Requires admin role.
       operationId: createChannel
       security:
         - bearerAuth: []
@@ -459,6 +481,7 @@ paths:
           type: integer
     patch:
       summary: Update channel
+      description: Requires admin role.
       operationId: updateChannel
       security:
         - bearerAuth: []
@@ -479,6 +502,7 @@ paths:
           description: Updated
     delete:
       summary: Delete channel
+      description: Requires admin role.
       operationId: deleteChannel
       security:
         - bearerAuth: []
@@ -499,6 +523,7 @@ paths:
           type: integer
     get:
       summary: Get channel ACL and groups
+      description: Requires admin role.
       operationId: getChannelACL
       security:
         - bearerAuth: []
@@ -539,6 +564,7 @@ paths:
                         deny: { type: integer, description: "Permission bitmask" }
     put:
       summary: Replace channel ACL and groups
+      description: Requires admin role.
       operationId: putChannelACL
       security:
         - bearerAuth: []

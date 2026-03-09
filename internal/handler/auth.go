@@ -56,7 +56,11 @@ func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
 			httputil.WriteError(w, http.StatusConflict, "username already exists", "USERNAME_EXISTS", nil)
 			return
 		}
-		httputil.WriteError(w, http.StatusBadRequest, err.Error(), "BAD_REQUEST", nil)
+		if strings.Contains(err.Error(), "required") || strings.Contains(err.Error(), "at least") {
+			httputil.WriteError(w, http.StatusBadRequest, err.Error(), "BAD_REQUEST", nil)
+			return
+		}
+		httputil.WriteError(w, http.StatusInternalServerError, "registration failed", "INTERNAL_ERROR", nil)
 		return
 	}
 

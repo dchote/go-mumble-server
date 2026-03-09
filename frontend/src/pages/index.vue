@@ -31,14 +31,16 @@
                 <thead>
                   <tr>
                     <th>Username</th>
-                    <th>IP Address</th>
+                    <th v-if="isAdmin">IP Address</th>
+                    <th>Crypto</th>
                     <th>Ping</th>
                   </tr>
                 </thead>
                 <tbody>
                   <tr v-for="u in connectedUsers" :key="u.session_id">
                     <td>{{ u.name || u.username || 'Unknown' }}</td>
-                    <td>{{ u.address || u.ip || '-' }}</td>
+                    <td v-if="isAdmin">{{ u.address || u.ip || '-' }}</td>
+                    <td>{{ u.crypto_mode || u.cryptoMode || '-' }}</td>
                     <td>{{ u.ping != null ? `${u.ping} ms` : '-' }}</td>
                   </tr>
                 </tbody>
@@ -53,13 +55,16 @@
 
 <script setup>
 import { ref, computed, onMounted } from 'vue'
+import { useStore } from 'vuex'
 import StandardCard from '@/components/common/StandardCard.vue'
 import ServerStatusInfo from '@/components/servers/ServerStatusInfo.vue'
 import api from '@/utils/api'
 
+const store = useStore()
 const status = ref(null)
 const connectedUsers = ref([])
 const loading = ref(true)
+const isAdmin = computed(() => store.getters['auth/isAdmin'])
 
 const connectedUsersCount = computed(() => {
   return connectedUsers.value?.length ?? 0

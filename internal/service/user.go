@@ -12,11 +12,11 @@ import (
 )
 
 var (
-	ErrUsernameExists     = errors.New("username already exists")
-	ErrInvalidCredentials = errors.New("invalid credentials")
+	ErrUsernameExists      = errors.New("username already exists")
+	ErrInvalidCredentials  = errors.New("invalid credentials")
 	ErrCannotChangeOwnRole = errors.New("cannot change own role")
-	ErrCannotDeleteSelf   = errors.New("cannot delete self")
-	ErrInvalidRole        = errors.New("invalid role")
+	ErrCannotDeleteSelf    = errors.New("cannot delete self")
+	ErrInvalidRole         = errors.New("invalid role")
 )
 
 // UserService handles user business logic.
@@ -221,7 +221,20 @@ func (s *UserService) UpdateUserRole(id uint, newRole string, currentUserID uint
 	if r != models.RoleAdmin && r != models.RoleUser {
 		return ErrInvalidRole
 	}
-	return s.db.Model(&models.User{}).Where("id = ?", id).Update("role", r).Error
+	newSecret, err := auth.GenerateSecret()
+	if err != nil {
+		return err
+	}
+
+	return s.db.Transaction(func(tx *gorm.DB) error {
+		return tx.Model(&models.User{}).
+			Where("id = ?", id).
+			Updates(map[string]interface{}{
+				"role":          r,
+				"jwt_secret":    newSecret,
+				"token_version": gorm.Expr("token_version + 1"),
+			}).Error
+	})
 }
 
 // DeleteUser deletes a user (admin only). Cannot delete self.

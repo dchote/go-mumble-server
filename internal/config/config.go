@@ -11,7 +11,6 @@ import (
 
 // Config holds the server configuration.
 type Config struct {
-	SecurityMode   string
 	Host           string
 	MumblePort     int
 	RESTPort       int
@@ -37,9 +36,6 @@ type Config struct {
 
 // fileConfig mirrors the TOML structure for parsing.
 type fileConfig struct {
-	Security struct {
-		Mode string `toml:"mode"`
-	} `toml:"security"`
 	Network struct {
 		Port     int    `toml:"port"`
 		RestPort int    `toml:"rest_port"`
@@ -78,7 +74,6 @@ type fileConfig struct {
 // defaults returns the default configuration.
 func defaults() *Config {
 	return &Config{
-		SecurityMode:  "legacy",
 		Host:          "0.0.0.0",
 		MumblePort:    64738,
 		RESTPort:      64730,
@@ -117,9 +112,6 @@ func Load(path string) (*Config, error) {
 }
 
 func applyFileConfig(cfg *Config, fc *fileConfig) {
-	if fc.Security.Mode != "" {
-		cfg.SecurityMode = fc.Security.Mode
-	}
 	if fc.Network.Host != "" {
 		cfg.Host = fc.Network.Host
 	}
@@ -166,9 +158,6 @@ func applyFileConfig(cfg *Config, fc *fileConfig) {
 }
 
 func applyEnv(cfg *Config) {
-	if v := os.Getenv("MUMBLE_SECURITY_MODE"); v != "" {
-		cfg.SecurityMode = v
-	}
 	if v := os.Getenv("MUMBLE_HOST"); v != "" {
 		cfg.Host = v
 	}

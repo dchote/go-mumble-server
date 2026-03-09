@@ -209,7 +209,7 @@ A client connection follows this sequence:
 1. **TCP connect** — Client opens a TCP connection to port 64738.
 2. **TLS handshake** — Server presents its certificate; optionally verifies client certificate.
 3. **Version exchange** — Both sides send `Version` messages.
-4. **Crypt setup** — Server sends `CryptSetup` with AEAD key and nonces for UDP encryption (key size depends on security mode).
+4. **Crypt setup** — Server sends `CryptSetup` with AEAD key and nonces for UDP encryption (key size signals negotiated crypto tier).
 5. **Authentication** — Client sends `Authenticate` with username, password, tokens, and codec list.
 6. **State sync** — Server sends full channel tree (`ChannelState`), all connected users (`UserState`), and server configuration (`ServerConfig`).
 7. **Server sync** — Server sends `ServerSync` with the client's session ID, welcome text, and permissions. Client is now fully connected.
@@ -265,15 +265,15 @@ Access control uses a layered model, implemented in `internal/acl/evaluator.go`:
 3. **Inheritance** — ACLs and groups cascade down the channel tree unless `InheritACL` is false.
 4. **Access tokens** — Clients supply tokens in the Authenticate message; stored on `User.AccessTokens` for token group membership.
 5. **Caching** — Permissions cached per (user, channel); invalidated on ACL change (REST PUT) and user channel move.
-6. **Default ACLs** — Root channel seeded with `all`, `auth`, `admin` rules via `EnsureDefaultRootACLs()`.
+6. **Default ACLs** — Root channel seeded with `all` (Traverse, Enter, Speak, Whisper, TextMessage, Listen), `auth` (MakeTempChannel, SelfRegister), `admin` (Write) via `EnsureDefaultRootACLs()`.
 
-SuperUser (user ID 0) always has Write. UserID is resolved from `registered_users` or API users at authenticate. API users (from the management `users` table) receive synthetic userIDs and RBAC roles are resolved for `@admin` membership. See [RBAC Strategy](patterns/acl-evaluation-pattern.md#rbac-strategy-api-users).
+UserID is resolved from `registered_users` or API users at authenticate. Unregistered users receive userID 0 and get permissions through normal ACL evaluation. API users (from the management `users` table) receive synthetic userIDs and RBAC roles are resolved for `@admin` membership. See [RBAC Strategy](patterns/acl-evaluation-pattern.md#rbac-strategy-api-users).
 
 Permissions are evaluated as a bitmask. See [patterns/acl-evaluation-pattern.md](patterns/acl-evaluation-pattern.md) and [protocol/permissions.md](protocol/permissions.md).
 
 ### Crypto (CryptState)
 
-Each client connection maintains a `CryptState` for UDP encryption. The algorithm depends on the [security mode](protocol/security-modes.md):
+Each client connection maintains a `CryptState` for UDP encryption. The algorithm is [negotiated per client](protocol/security-modes.md):
 
 - **Legacy mode** — OCB2-AES128. 128-bit key, 3-byte auth tag, single-byte nonce increment. Matches original Mumble.
 - **Secure mode** — AES-256-GCM. 256-bit key, 16-byte auth tag, 12-byte explicit nonce. Modern NIST-standard AEAD.
@@ -287,7 +287,7 @@ See [protocol/encryption.md](protocol/encryption.md) and [protocol/security-mode
 
 ### Database
 
-SQLite is the primary storage backend, **encrypted at rest** with AES-256 regardless of protocol security mode. Tables include:
+SQLite is the primary storage backend. Tables include:
 
 | Table | Description |
 |-------|-------------|
@@ -301,7 +301,7 @@ SQLite is the primary storage backend, **encrypted at rest** with AES-256 regard
 | `bans` | Server ban list |
 | `tls_certs` | Per-virtual-server TLS certificates and keys |
 
-Passwords are always stored as Argon2id hashes internally, even when the server runs in legacy mode (which uses PBKDF2 for the wire authentication check).
+Management (API) user passwords are stored as bcrypt hashes; Mumble registered-user passwords use Argon2id. The wire protocol in legacy mode may use different algorithms for authentication; storage hashing is independent.
 
 ### REST API
 
@@ -315,7 +315,7 @@ The REST management API runs on a separate HTTP server (default port `64730`, co
 | `/api/v1/servers/:id/channels` | GET, POST | Channel tree + create |
 | `/api/v1/servers/:id/channels/:channelId` | PATCH, DELETE | Update/delete channel |
 | `/api/v1/servers/:id/channels/:channelId/acl` | GET, PUT | Channel ACLs and groups |
-| `/api/v1/servers/:id/users` | GET | Connected Mumble users (includes `is_admin`, `certificate_hash` for RBAC) |
+| `/api/v1/servers/:id/users` | GET | Connected Mumble users; admin receives full data; non-admin receives sanitized list (no `address`, `certificate_hash`) |
 | `/api/v1/servers/:id/users/:sessionId/kick` | POST | Kick connected user |
 | `/api/v1/servers/:id/users/:sessionId/mute` | POST | Mute/unmute connected user |
 | `/api/v1/servers/:id/users/:sessionId/ban` | POST | Ban and kick connected user |
@@ -408,7 +408,7 @@ All runtime settings are stored in SQLite. Two tables:
 
 | Table | Scope | REST Endpoint | Key Settings |
 |-------|-------|---------------|--------------|
-| `meta_config` | Global (process-level) | `GET/PATCH /api/v1/meta/config` | Security mode, bind address, ports, Bonjour, JWT |
+| `meta_config` | Global (process-level) | `GET/PATCH /api/v1/meta/config` | Bind address, ports, Bonjour, JWT |
 | `server_configs` | Per-virtual-server | `GET/PATCH /api/v1/servers/:id/config` | Max users, bandwidth, welcome text, password, default channel, cert required, channel limits |
 
 On first start, the TOML/env/flag values seed both tables. Subsequent changes are made through the API or web UI and persist in the database.
@@ -425,8 +425,8 @@ On first start, the TOML/env/flag values seed both tables. Subsequent changes ar
 
 - [Control Messages](protocol/control-messages.md) — TCP message catalog (types 0–26)
 - [Voice Data](protocol/voice-data.md) — UDP audio packet format and routing
-- [Security Modes](protocol/security-modes.md) — Legacy vs secure mode design
-- [Encryption](protocol/encryption.md) — TLS, AEAD ciphers, password hashing, storage encryption
+- [Security Modes](protocol/security-modes.md) — Per-client negotiated crypto tiers
+- [Encryption](protocol/encryption.md) — TLS, AEAD ciphers, password hashing
 - [Permissions](protocol/permissions.md) — Permission bitmask definitions
 
 ### Patterns
@@ -445,7 +445,7 @@ On first start, the TOML/env/flag values seed both tables. Subsequent changes ar
 | Go over C++ | Simpler concurrency, single binary, fast compilation, no Qt dependency |
 | Legacy + secure modes | Full backward compatibility when needed; modern crypto when possible |
 | AES-256-GCM over DTLS | Go has no stdlib DTLS; GCM is NIST standard with hardware accel, same key-exchange model |
-| Always-encrypted storage | Local data security should not depend on protocol mode choice |
+| SQLite not encrypted at rest | Current implementation uses plain SQLite; use filesystem or deployment encryption if required |
 | Protocol library in `pkg/` | Enables reuse for clients, bots, bridges, and tools without importing server code |
 | Goroutine-per-connection | Natural fit for Go; avoids complex thread pool / event loop |
 | SQLite for persistence | Zero-config, embedded, sufficient for Mumble server workloads |

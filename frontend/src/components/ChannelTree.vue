@@ -6,6 +6,8 @@
       :channel="ch"
       :server-id="serverId"
       :users="users"
+      :can-manage-users="canManageUsers"
+      :show-sensitive-user-data="showSensitiveUserData"
       @create-sub="(parent) => $emit('create-sub', parent)"
       @edit="(ch) => $emit('edit', ch)"
       @acl="(ch) => $emit('acl', ch)"
@@ -30,6 +32,14 @@ defineProps({
   users: {
     type: Array,
     default: () => [],
+  },
+  canManageUsers: {
+    type: Boolean,
+    default: false,
+  },
+  showSensitiveUserData: {
+    type: Boolean,
+    default: false,
   },
 })
 defineEmits(['create-sub', 'edit', 'acl', 'delete', 'user-action'])

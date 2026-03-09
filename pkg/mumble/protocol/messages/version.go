@@ -4,11 +4,12 @@ import "github.com/dchote/go-mumble-server/pkg/mumble/protocol/wire"
 
 // Version (type 0). Field nums from Mumble.proto.
 type Version struct {
-	VersionV1 uint32
-	VersionV2 uint64
-	Release   string
-	OS        string
-	OSVersion string
+	VersionV1     uint32
+	VersionV2     uint64
+	Release       string
+	OS            string
+	OSVersion     string
+	CryptoModes   uint32 // bitmask: bit0=lite, bit1=legacy, bit2=secure
 }
 
 func (m *Version) Marshal() ([]byte, error) {
@@ -29,6 +30,10 @@ func (m *Version) Marshal() ([]byte, error) {
 	if m.VersionV2 != 0 {
 		b = wire.AppendTag(b, 5, wire.WireVarint)
 		b = wire.AppendVarint(b, m.VersionV2)
+	}
+	if m.CryptoModes != 0 {
+		b = wire.AppendTag(b, 6, wire.WireVarint)
+		b = wire.AppendVarint(b, uint64(m.CryptoModes))
 	}
 	return b, nil
 }
@@ -77,6 +82,13 @@ func (m *Version) Unmarshal(data []byte) error {
 			}
 			b = b[n:]
 			m.VersionV2 = v
+		case 6:
+			v, n, err := wire.ReadVarint(b)
+			if err != nil {
+				return err
+			}
+			b = b[n:]
+			m.CryptoModes = uint32(v)
 		default:
 			skip, err := wire.SkipField(b, wt)
 			if err != nil {

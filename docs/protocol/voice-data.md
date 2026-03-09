@@ -4,18 +4,18 @@
 
 ## Overview
 
-Voice data travels over UDP (encrypted with an AEAD cipher) or is tunneled over the TCP control channel via `UDPTunnel` (message type 1). Two packet formats exist: the legacy binary format and the modern wire format (introduced in Mumble 1.5.0, similar encoding style). The encryption algorithm depends on the [security mode](security-modes.md) — OCB2-AES128 in legacy mode, AES-256-GCM in secure mode.
+Voice data travels over UDP (encrypted with an AEAD cipher) or is tunneled over the TCP control channel via `UDPTunnel` (message type 1). Two packet formats exist: the legacy binary format and the modern wire format (introduced in Mumble 1.5.0, similar encoding style). The encryption algorithm is [negotiated per client](security-modes.md) — OCB2-AES128 (legacy), AES-256-GCM (secure), or none (lite).
 
 ## Transport
 
 ### UDP
 
 - Same port as TCP (default 64738).
-- Encrypted with AEAD cipher — OCB2-AES128 (legacy mode) or AES-256-GCM (secure mode). Each client has a unique key and nonce pair.
+- Encrypted with AEAD cipher — OCB2-AES128 (legacy), AES-256-GCM (secure), or cleartext (lite). Each client has a unique key and nonce pair (or none for lite).
 - Maximum packet size: 1024 bytes.
 - Preferred transport for low latency.
 - **UDP ping (codec type 1):** Clients send encrypted pings to test connectivity; the server echoes them back. Without this echo, clients assume UDP is unavailable and fall back to TCP tunneling.
-- Encryption overhead: 4 bytes (legacy) or 28 bytes (secure). See [encryption.md](encryption.md).
+- Encryption overhead: 0 bytes (lite), 4 bytes (legacy), or 28 bytes (secure). See [encryption.md](encryption.md).
 
 ### TCP Tunnel (UDPTunnel)
 

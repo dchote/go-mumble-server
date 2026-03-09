@@ -2,6 +2,7 @@ package mumble
 
 import (
 	"crypto/rand"
+	"crypto/tls"
 	"log/slog"
 	"net"
 	"strings"
@@ -26,16 +27,16 @@ import (
 
 // Server holds Mumble server state and builds the handler table.
 type Server struct {
-	cfg          *config.Config
-	db           *gorm.DB
-	users        *user.Manager
-	chans        *channel.Manager
-	bans         *ban.Manager
-	acl          *acl.Evaluator
-	table        protocol.HandlerTable
-	connMu       sync.RWMutex
-	conns        map[uint32]*connection.Conn
-	addrBySession sync.Map
+	cfg             *config.Config
+	db              *gorm.DB
+	users           *user.Manager
+	chans           *channel.Manager
+	bans            *ban.Manager
+	acl             *acl.Evaluator
+	table           protocol.HandlerTable
+	connMu          sync.RWMutex
+	conns           map[uint32]*connection.Conn
+	addrBySession   sync.Map
 	voiceTargets    sync.Map // session -> map[targetID][]session
 	textRateLimiter sync.Map // session -> *textRateState
 	router          *audio.Router
@@ -57,18 +58,22 @@ func (s *Server) HandleUDP(addr net.Addr, data []byte) {
 	var senderSession uint32
 	var senderCrypt *crypto.CryptState
 	s.connMu.RLock()
-	for sid, c := range s.conns {
-		if c.Crypt == nil || c.State() != connection.StateActive {
-			continue
-		}
-		err := c.Crypt.Decrypt(plain, data)
-		if err == nil {
-			senderSession = sid
-			senderCrypt = c.Crypt
-			plain = plain[:len(data)-c.Crypt.Overhead()]
-			break
+	// Try secure and legacy first (they fail on wrong format); lite last (always succeeds).
+	for _, mode := range []crypto.Mode{crypto.ModeSecure, crypto.ModeLegacy, crypto.ModeLite} {
+		for sid, c := range s.conns {
+			if c.Crypt == nil || c.State() != connection.StateActive || c.Crypt.Mode() != mode {
+				continue
+			}
+			err := c.Crypt.Decrypt(plain, data)
+			if err == nil {
+				senderSession = sid
+				senderCrypt = c.Crypt
+				plain = plain[:len(data)-c.Crypt.Overhead()]
+				goto found
+			}
 		}
 	}
+found:
 	s.connMu.RUnlock()
 	if senderSession == 0 {
 		return
@@ -155,10 +160,7 @@ func (s *Server) audioFilterRecipient(senderSessionID, recipientSessionID uint32
 	if !ok {
 		return false
 	}
-	if u.Deaf || u.SelfDeaf {
-		return false
-	}
-	return s.acl.Check(u.UserID, u.ChannelID, mumble.PermissionListen)
+	return !u.Deaf && !u.SelfDeaf
 }
 
 func (s *Server) getVoiceTargetRecipients(sessionID uint32, targetID uint8) []uint32 {
@@ -198,17 +200,17 @@ func NewServer(cfg *config.Config, db *gorm.DB, serverID uint, udpConn net.Packe
 			}
 			return u.ChannelID
 		},
-		GetUsersInChan:   s.users.SessionIDsInChannel,
-		GetVoiceTarget:   s.getVoiceTargetRecipients,
-		GetLinkedChans:   func(cid uint32) []uint32 {
+		GetUsersInChan: s.users.SessionIDsInChannel,
+		GetVoiceTarget: s.getVoiceTargetRecipients,
+		GetLinkedChans: func(cid uint32) []uint32 {
 			ids := s.chans.LinkedChannelIDs(cid)
 			if len(ids) <= 1 {
 				return nil
 			}
 			return ids[1:]
 		},
-		FilterRecipient:  s.audioFilterRecipient,
-		CanSenderSpeak:   s.canSenderSpeak,
+		FilterRecipient: s.audioFilterRecipient,
+		CanSenderSpeak:  s.canSenderSpeak,
 	})
 	s.registerHandlers()
 	return s
@@ -404,8 +406,8 @@ func (s *Server) handleVersion(msgType protocol.MessageType, payload []byte, ctx
 			return err
 		}
 		slog.Debug("client version", "release", v.Release, "os", v.OS)
+		c.SetClientCryptoModes(v.CryptoModes)
 	}
-	_ = c
 	return nil
 }
 
@@ -456,14 +458,9 @@ func (s *Server) handleAuthenticate(msgType protocol.MessageType, payload []byte
 	userID := uint32(0)
 	if apiUserID != 0 {
 		userID = acl.MakeAPIUserID(apiUserID)
-	} else if uid, hash, found := s.lookupRegisteredUser(authMsg.Username); found {
-		if authMsg.Password != "" && hash != "" {
-			// Verify password: Argon2id (registered users) or bcrypt (legacy)
-			valid := (strings.HasPrefix(hash, "$argon2id$") && auth.CompareArgon2id(hash, authMsg.Password)) ||
-				(strings.HasPrefix(hash, "$2") && auth.ComparePassword(hash, authMsg.Password))
-			if !valid {
-				return s.sendReject(c, messages.RejectWrongServerPW, "Wrong password")
-			}
+	} else if uid, hash, regCertHash, found := s.lookupRegisteredUser(authMsg.Username); found {
+		if !registeredUserCredentialsValid(hash, regCertHash, authMsg.Password, certHash) {
+			return s.sendReject(c, messages.RejectWrongServerPW, "Wrong password")
 		}
 		userID = uid
 	}
@@ -488,33 +485,85 @@ func (s *Server) handleAuthenticate(msgType protocol.MessageType, payload []byte
 	c.SetSessionID(u.SessionID)
 	c.SetUser(u.Name, u.UserID, u.ChannelID)
 	c.SetActive()
-	s.RegisterConn(u.SessionID, c)
 	s.sendSync(c, u)
+	s.RegisterConn(u.SessionID, c)
 	s.Broadcast(u.SessionID, protocol.MessageUserState, userToState(u))
 	slog.Info("Mumble client authenticated", "user", u.Name, "session", u.SessionID, "channel", u.ChannelID)
 	return nil
 }
 
-// lookupRegisteredUser returns UserID for a username on this server's registered_users.
-func (s *Server) lookupRegisteredUser(username string) (userID uint32, passwordHash string, found bool) {
+// lookupRegisteredUser returns UserID and credentials for a username on this server's registered_users.
+func (s *Server) lookupRegisteredUser(username string) (userID uint32, passwordHash, certHash string, found bool) {
 	var u struct {
 		UserID       int32
 		PasswordHash string
+		CertHash     string
 	}
 	err := s.db.Table("registered_users").Where("server_id = ? AND name = ?", s.chans.ServerID(), username).
-		Select("user_id", "password_hash").First(&u).Error
+		Select("user_id", "password_hash", "cert_hash").First(&u).Error
 	if err != nil {
-		return 0, "", false
+		return 0, "", "", false
 	}
-	return uint32(u.UserID), u.PasswordHash, true
+	return uint32(u.UserID), u.PasswordHash, u.CertHash, true
+}
+
+func registeredUserCredentialsValid(storedPasswordHash, storedCertHash, providedPassword, presentedCertHash string) bool {
+	certMatches := storedCertHash != "" && presentedCertHash != "" && strings.EqualFold(storedCertHash, presentedCertHash)
+	passwordMatches := false
+	if providedPassword != "" && storedPasswordHash != "" {
+		// Support both Argon2id and legacy bcrypt hashes.
+		passwordMatches = (strings.HasPrefix(storedPasswordHash, "$argon2id$") && auth.CompareArgon2id(storedPasswordHash, providedPassword)) ||
+			(strings.HasPrefix(storedPasswordHash, "$2") && auth.ComparePassword(storedPasswordHash, providedPassword))
+	}
+	return certMatches || passwordMatches
 }
 
 func (s *Server) sendReject(c *connection.Conn, typ messages.RejectType, reason string) error {
 	return c.WriteMessage(protocol.MessageReject, &messages.Reject{Type: typ, Reason: reason})
 }
 
+func cryptoModeString(mode crypto.Mode) string {
+	switch mode {
+	case crypto.ModeSecure:
+		return "secure"
+	case crypto.ModeLite:
+		return "lite"
+	default:
+		return "legacy"
+	}
+}
+
+// negotiateCryptoMode selects the best mutually-supported crypto mode for the connection.
+func (s *Server) negotiateCryptoMode(c *connection.Conn) crypto.Mode {
+	clientModes := c.ClientCryptoModes()
+	if clientModes == 0 {
+		clientModes = 0x02 // standard client: legacy only
+	}
+	mutual := clientModes & 0x07 // server supports all (lite|legacy|secure)
+	tls13 := false
+	hasClientCert := false
+	if tc, ok := c.Conn.(*tls.Conn); ok {
+		st := tc.ConnectionState()
+		tls13 = st.Version == tls.VersionTLS13
+		hasClientCert = len(st.PeerCertificates) > 0
+	}
+	if (mutual&0x04) != 0 && tls13 && hasClientCert {
+		return crypto.ModeSecure
+	}
+	if (mutual & 0x02) != 0 {
+		return crypto.ModeLegacy
+	}
+	if (mutual & 0x01) != 0 {
+		return crypto.ModeLite
+	}
+	return crypto.ModeLegacy
+}
+
 func (s *Server) sendSync(c *connection.Conn, u *mumble.User) {
-	key, encNonce, decNonce := s.generateCryptSetup()
+	mode := s.negotiateCryptoMode(c)
+	u.CryptoMode = cryptoModeString(mode)
+	c.Crypt = crypto.NewCryptState(mode)
+	key, encNonce, decNonce := s.generateCryptSetup(mode)
 	c.Crypt.SetKey(key, encNonce, decNonce)
 	_ = c.WriteMessage(protocol.MessageCryptSetup, &messages.CryptSetup{
 		Key:         key,
@@ -540,16 +589,17 @@ func (s *Server) sendSync(c *connection.Conn, u *mumble.User) {
 		Permissions:  perms,
 	})
 	_ = c.WriteMessage(protocol.MessageServerConfig, &messages.ServerConfig{
-		MaxBandwidth:        uint32(s.cfg.MaxBandwidth),
-		WelcomeText:         s.cfg.WelcomeText,
-		AllowHTML:           true,
-		MessageLength:       5000,
-		MaxUsers:            uint32(s.cfg.MaxUsers),
+		MaxBandwidth:  uint32(s.cfg.MaxBandwidth),
+		WelcomeText:   s.cfg.WelcomeText,
+		AllowHTML:     true,
+		MessageLength: 5000,
+		MaxUsers:      uint32(s.cfg.MaxUsers),
 	})
 }
 
-func (s *Server) generateCryptSetup() (key, encNonce, decNonce []byte) {
-	if strings.ToLower(s.cfg.SecurityMode) == "secure" {
+func (s *Server) generateCryptSetup(mode crypto.Mode) (key, encNonce, decNonce []byte) {
+	switch mode {
+	case crypto.ModeSecure:
 		key = make([]byte, 32)
 		rand.Read(key)
 		encNonce = make([]byte, 12)
@@ -557,14 +607,17 @@ func (s *Server) generateCryptSetup() (key, encNonce, decNonce []byte) {
 		decNonce = make([]byte, 12)
 		rand.Read(decNonce)
 		return key, encNonce, decNonce
+	case crypto.ModeLite:
+		return []byte{}, nil, nil
+	default:
+		key = make([]byte, 16)
+		rand.Read(key)
+		encNonce = make([]byte, 16)
+		rand.Read(encNonce)
+		decNonce = make([]byte, 16)
+		rand.Read(decNonce)
+		return key, encNonce, decNonce
 	}
-	key = make([]byte, 16)
-	rand.Read(key)
-	encNonce = make([]byte, 16)
-	rand.Read(encNonce)
-	decNonce = make([]byte, 16)
-	rand.Read(decNonce)
-	return key, encNonce, decNonce
 }
 
 func channelToState(ch *mumble.Channel) *messages.ChannelState {

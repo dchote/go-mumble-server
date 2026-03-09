@@ -13,7 +13,7 @@ go-mumble-server re-imagines the Mumble server with modern priorities: a single 
 **REST management API on :64730** — Administration and monitoring with Swagger docs at `/docs`.
 **Web management UI** — Vue 3 + Vuetify frontend embedded in the binary, served alongside the REST API.
 
-Two **security modes**: **legacy** (100% backward compatible with all Mumble clients) and **secure** (modern crypto, breaks backward compatibility). Local storage is always encrypted regardless of mode.
+**Per-client security negotiation** — Legacy (default), secure, or lite. Standard Mumble clients use legacy automatically; secure-aware clients upgrade when possible. Local storage is always encrypted.
 
 ### Screenshots
 
@@ -45,7 +45,7 @@ Two **security modes**: **legacy** (100% backward compatible with all Mumble cli
 - **Whisper / voice targets** — Directed audio to specific users, channels (including root), or groups
 - **User management** — Certificate-based identity, registration, and server passwords
 - **Virtual servers** — Multiple logical servers in a single process
-- **Dual security modes** — Legacy (OCB2-AES128, TLS 1.2+) for compatibility; Secure (AES-256-GCM, TLS 1.3, Argon2id) for modern security
+- **Negotiated security tiers** — Legacy (OCB2-AES128), Secure (AES-256-GCM), or Lite (cleartext UDP for constrained devices); per-client negotiation
 - **Encrypted storage** — AES-256 encrypted database at rest, Argon2id password hashes, regardless of protocol mode
 - **REST API** — Server management, monitoring, and integration with Swagger UI at `/docs`
 - **Web management UI** — Vue 3 + Vuetify frontend embedded in the server binary
@@ -57,7 +57,7 @@ Two **security modes**: **legacy** (100% backward compatible with all Mumble cli
 - **Message types** — Native Go structs for all 27 control messages and UDP audio messages (no protobuf dependency)
 - **Packet framing** — Read/write functions for the 6-byte TCP header format
 - **Handler table** — Message dispatch infrastructure usable by both server and client code
-- **CryptState** — AEAD encrypt/decrypt for UDP voice packets (OCB2-AES128 legacy, AES-256-GCM secure)
+- **CryptState** — AEAD encrypt/decrypt for UDP voice packets (OCB2-AES128 legacy, AES-256-GCM secure, or lite pass-through)
 - **Audio packets** — Parse/build audio packets with varint codec, codec IDs, voice targets
 - **Core types** — `Channel`, `User`, `Permission`, `ACL`, `VoiceTarget`, `TextMessage`, `BanEntry`
 - **No server dependencies** — Pure protocol primitives with zero coupling to server internals
@@ -102,17 +102,14 @@ Use `-timeout=30s` to avoid hanging. For race detection: `CGO_ENABLED=1 go test 
 ## Running
 
 ```bash
-# Start with defaults (legacy mode, Mumble on :64738, REST on :64730)
+# Start with defaults (Mumble on :64738, REST on :64730)
 ./go-mumble-server
-
-# Start in secure mode
-./go-mumble-server -security-mode secure
 
 # With configuration file
 ./go-mumble-server -config /path/to/mumble-server.toml
 
 # With environment variables
-MUMBLE_SECURITY_MODE=secure MUMBLE_MUMBLE_PORT=64738 MUMBLE_REST_PORT=64730 ./go-mumble-server
+MUMBLE_MUMBLE_PORT=64738 MUMBLE_REST_PORT=64730 ./go-mumble-server
 ```
 
 ## Configuration
@@ -145,7 +142,6 @@ Managed via REST API (`/api/v1/meta/config`, `/api/v1/servers/:id/config`) and t
 
 | Setting | Default | Description |
 |---------|---------|-------------|
-| Security mode | `legacy` | `legacy` or `secure` |
 | Host | `0.0.0.0` | Bind address |
 | Mumble port | 64738 | Mumble protocol port (TCP + UDP) |
 | REST port | 64730 | REST API + web UI port |

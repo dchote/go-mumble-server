@@ -7,6 +7,7 @@ import (
 	"strconv"
 
 	"github.com/dchote/go-mumble-server/internal/acl"
+	"github.com/dchote/go-mumble-server/internal/auth"
 	"github.com/dchote/go-mumble-server/internal/cert"
 	"github.com/dchote/go-mumble-server/internal/channel"
 	"github.com/dchote/go-mumble-server/internal/config"
@@ -22,7 +23,7 @@ type OnChannelMutated func(serverID uint, ch interface{}, channelID uint32, remo
 
 // ConnectedUserLister lists connected Mumble users; used by GetUsers.
 type ConnectedUserLister interface {
-	ListConnected(serverID uint, db *gorm.DB) interface{}
+	ListConnected(serverID uint, db *gorm.DB, includeSensitive bool) interface{}
 }
 
 // ConnectedUserActioner performs kick, mute, ban on connected users (REST-initiated).
@@ -34,14 +35,14 @@ type ConnectedUserActioner interface {
 
 // ServerHandler handles server and channel REST endpoints.
 type ServerHandler struct {
-	db                  *gorm.DB
-	cfg                 *config.Config
-	connectedUsers      ConnectedUserLister
-	userActioner        ConnectedUserActioner
-	getChanMgr          func(serverID uint) *channel.Manager
-	onChannelMutated    OnChannelMutated
-	metaHost            string
-	metaMumblePort      int
+	db               *gorm.DB
+	cfg              *config.Config
+	connectedUsers   ConnectedUserLister
+	userActioner     ConnectedUserActioner
+	getChanMgr       func(serverID uint) *channel.Manager
+	onChannelMutated OnChannelMutated
+	metaHost         string
+	metaMumblePort   int
 }
 
 // NewServerHandler creates a ServerHandler.
@@ -210,13 +211,13 @@ func (h *ServerHandler) GetConfig(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"max_users":            sc.MaxUsers,
-		"max_bandwidth":        sc.MaxBandwidth,
-		"welcome_text":         sc.WelcomeText,
-		"default_channel":      sc.DefaultChannel,
-		"cert_required":        sc.CertRequired,
+		"max_users":             sc.MaxUsers,
+		"max_bandwidth":         sc.MaxBandwidth,
+		"welcome_text":          sc.WelcomeText,
+		"default_channel":       sc.DefaultChannel,
+		"cert_required":         sc.CertRequired,
 		"channel_nesting_limit": sc.ChannelNestingLimit,
-		"channel_count_limit":  sc.ChannelCountLimit,
+		"channel_count_limit":   sc.ChannelCountLimit,
 	})
 }
 
@@ -294,7 +295,6 @@ func (h *ServerHandler) GetMetaConfig(w http.ResponseWriter, r *http.Request) {
 	}
 	if meta == nil {
 		meta = &config.MetaConfig{
-			SecurityMode:  "legacy",
 			Host:          "0.0.0.0",
 			MumblePort:    64738,
 			RESTPort:      64730,
@@ -305,7 +305,7 @@ func (h *ServerHandler) GetMetaConfig(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"security_mode": meta.SecurityMode, "host": meta.Host,
+		"host": meta.Host,
 		"mumble_port": meta.MumblePort, "rest_port": meta.RESTPort,
 		"bonjour": meta.Bonjour, "register_name": meta.RegisterName,
 	})
@@ -314,7 +314,6 @@ func (h *ServerHandler) GetMetaConfig(w http.ResponseWriter, r *http.Request) {
 // UpdateMetaConfig updates global (meta) config.
 func (h *ServerHandler) UpdateMetaConfig(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		SecurityMode *string `json:"security_mode"`
 		Host         *string `json:"host"`
 		MumblePort   *int    `json:"mumble_port"`
 		RESTPort     *int    `json:"rest_port"`
@@ -328,13 +327,10 @@ func (h *ServerHandler) UpdateMetaConfig(w http.ResponseWriter, r *http.Request)
 	meta, err := config.LoadMetaConfig(h.db)
 	if err != nil || meta == nil {
 		meta = &config.MetaConfig{
-			SecurityMode: "legacy", Host: "0.0.0.0",
+			Host: "0.0.0.0",
 			MumblePort: 64738, RESTPort: 64730,
 			JWTIssuer: "go-mumble-server", JWTAudience: "go-mumble-server-api", JWTExpiryDays: 30,
 		}
-	}
-	if body.SecurityMode != nil {
-		meta.SecurityMode = *body.SecurityMode
 	}
 	if body.Host != nil {
 		meta.Host = *body.Host
@@ -549,14 +545,14 @@ func (h *ServerHandler) DeleteChannel(w http.ResponseWriter, r *http.Request) {
 
 // ChannelNode is a channel with nested children for tree display.
 type ChannelNode struct {
-	ID          uint         `json:"id"`
-	ServerID    uint         `json:"server_id"`
-	ParentID    *uint        `json:"parent_id,omitempty"`
-	Name        string       `json:"name"`
-	Description string       `json:"description"`
-	Position    int32        `json:"position"`
-	MaxUsers    uint32       `json:"max_users"`
-	IsTemporary bool         `json:"is_temporary"`
+	ID          uint          `json:"id"`
+	ServerID    uint          `json:"server_id"`
+	ParentID    *uint         `json:"parent_id,omitempty"`
+	Name        string        `json:"name"`
+	Description string        `json:"description"`
+	Position    int32         `json:"position"`
+	MaxUsers    uint32        `json:"max_users"`
+	IsTemporary bool          `json:"is_temporary"`
 	Children    []ChannelNode `json:"children,omitempty"`
 }
 
@@ -585,11 +581,16 @@ func ptr(u uint) *uint { return &u }
 
 // GetUsers returns connected Mumble users for a server.
 func (h *ServerHandler) GetUsers(w http.ResponseWriter, r *http.Request) {
+	includeSensitive := false
+	if claims, ok := r.Context().Value(auth.ClaimsKey).(*auth.Claims); ok && claims != nil && claims.Role == "admin" {
+		includeSensitive = true
+	}
+
 	var users interface{} = []struct{}{}
 	if h.connectedUsers != nil {
 		idStr := chi.URLParam(r, "id")
 		serverID, _ := strconv.ParseUint(idStr, 10, 32)
-		users = h.connectedUsers.ListConnected(uint(serverID), h.db)
+		users = h.connectedUsers.ListConnected(uint(serverID), h.db, includeSensitive)
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(users)

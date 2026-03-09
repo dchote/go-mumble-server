@@ -74,20 +74,20 @@ func (h *RegisteredUserHandler) Create(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"name is required"}`, http.StatusBadRequest)
 		return
 	}
+	if body.Password == "" {
+		http.Error(w, `{"error":"password is required"}`, http.StatusBadRequest)
+		return
+	}
 	var maxID sql.NullInt32
 	h.db.Model(&models.RegisteredUser{}).Where("server_id = ?", serverID).Select("MAX(user_id)").Scan(&maxID)
 	nextID := int32(1)
 	if maxID.Valid && maxID.Int32 >= 0 {
 		nextID = maxID.Int32 + 1
 	}
-	passwordHash := ""
-	if body.Password != "" {
-		var err error
-		passwordHash, err = auth.HashArgon2id(body.Password)
-		if err != nil {
-			http.Error(w, `{"error":"failed to hash password"}`, http.StatusInternalServerError)
-			return
-		}
+	passwordHash, err := auth.HashArgon2id(body.Password)
+	if err != nil {
+		http.Error(w, `{"error":"failed to hash password"}`, http.StatusInternalServerError)
+		return
 	}
 	user := models.RegisteredUser{
 		ServerID:     uint(serverID),

@@ -116,7 +116,7 @@ For a voice packet from user A with target T:
    - Collect all users in channels linked to A's channel.
    - Collect all listeners on A's channel.
    - Remove A from the recipient set.
-   - Filter by `Speak` permission and deaf/mute state.
+   - Filter by sender `Speak` permission; exclude recipients who are deaf or self-deaf (no `Listen` check on same-channel recipients — Murmur only checks `Listen` when adding cross-channel listeners).
 3. **Target 1–30 (whisper):**
    - Look up A's `VoiceTarget[T]`.
    - Resolve target sessions, channels (optionally with links/children/group).
@@ -124,19 +124,7 @@ For a voice packet from user A with target T:
 
 ## Receiver Grouping
 
-Recipients are grouped by transport, protocol version, and security mode to minimize work:
-
-```
-Recipients
-├── UDP recipients (all share the same security mode)
-│   ├── Legacy format group → AEAD encrypt + send per recipient
-│   └── Protobuf format group → AEAD encrypt + send per recipient
-└── TCP recipients
-    ├── Legacy format group → wrap in UDPTunnel + send
-    └── Protobuf format group → wrap in UDPTunnel + send
-```
-
-The `AudioReceiverBuffer` pattern (from Murmur) groups recipients that share the same context, version, and volume adjustment to avoid redundant packet construction. In secure mode, the per-recipient encryption uses AES-256-GCM with 28 bytes overhead instead of OCB2's 4 bytes — audio packet construction accounts for this difference.
+Recipients are grouped by transport and protocol version. Each recipient's `CryptState` determines the encryption (lite/legacy/secure); the server encrypts per recipient with the appropriate overhead (0, 4, or 28 bytes).
 
 ## Performance Considerations
 

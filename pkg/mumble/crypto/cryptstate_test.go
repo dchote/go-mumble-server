@@ -35,6 +35,40 @@ func TestCryptState_LegacyRoundTrip(t *testing.T) {
 	}
 }
 
+func TestCryptState_LiteRoundTrip(t *testing.T) {
+	cs := NewCryptState(ModeLite)
+	if err := cs.SetKey(nil, nil, nil); err != nil {
+		t.Fatalf("SetKey: %v", err)
+	}
+	if cs.Overhead() != 0 {
+		t.Errorf("Lite Overhead = %d, want 0", cs.Overhead())
+	}
+	plain := []byte("hello world")
+	dst := make([]byte, len(plain))
+	if err := cs.Encrypt(dst, plain); err != nil {
+		t.Fatalf("Encrypt: %v", err)
+	}
+	if !bytes.Equal(dst, plain) {
+		t.Errorf("Lite Encrypt should pass-through: got %q", dst)
+	}
+	got := make([]byte, len(plain))
+	if err := cs.Decrypt(got, dst); err != nil {
+		t.Fatalf("Decrypt: %v", err)
+	}
+	if !bytes.Equal(got, plain) {
+		t.Errorf("round-trip: got %q", got)
+	}
+}
+
+func TestCryptState_Mode(t *testing.T) {
+	for _, mode := range []Mode{ModeLite, ModeLegacy, ModeSecure} {
+		cs := NewCryptState(mode)
+		if cs.Mode() != mode {
+			t.Errorf("Mode() = %v, want %v", cs.Mode(), mode)
+		}
+	}
+}
+
 func TestCryptState_SecureRoundTrip(t *testing.T) {
 	cs := NewCryptState(ModeSecure)
 	key := make([]byte, 32)

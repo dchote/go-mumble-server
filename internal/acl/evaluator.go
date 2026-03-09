@@ -69,25 +69,24 @@ func (e *Evaluator) EffectivePermissions(userID uint32, channelID uint32) uint32
 }
 
 func (e *Evaluator) evaluate(userID uint32, channelID uint32) uint32 {
-	// SuperUser (user ID 0) always has Write
-	if userID == 0 {
-		return uint32(mumble.PermissionWrite)
-	}
+	// Murmur baseline: all users start with these permissions before ACL evaluation.
+	def := uint32(mumble.PermissionTraverse | mumble.PermissionEnter |
+		mumble.PermissionSpeak | mumble.PermissionWhisper |
+		mumble.PermissionTextMessage | mumble.PermissionListen)
 
-	// Build ACL chain from root to target channel
 	chain := e.buildACLChain(channelID)
 	if len(chain) == 0 {
 		return e.defaultRootPerms(userID)
 	}
 
-	// Get user for meta groups
 	u := e.getUserByUserID(userID)
 	userChannelID := uint32(0)
 	if u != nil {
 		userChannelID = u.ChannelID
 	}
 
-	var granted, denied uint32
+	granted := def
+	var denied uint32
 	for _, entry := range chain {
 		if !e.entryApplies(entry, channelID) {
 			continue
@@ -101,12 +100,7 @@ func (e *Evaluator) evaluate(userID uint32, channelID uint32) uint32 {
 		denied &^= entry.Grant
 	}
 
-	result := granted &^ denied
-	// SuperUser override
-	if userID == 0 {
-		result |= uint32(mumble.PermissionWrite)
-	}
-	return result
+	return granted &^ denied
 }
 
 type aclEntry struct {
@@ -236,9 +230,6 @@ func (e *Evaluator) userInGroup(userID uint32, groupName string, resolveChannelI
 	case "out":
 		return userChannelID != resolveChannelID
 	case "admin":
-		if userID == 0 {
-			return true // SuperUser is always in admin
-		}
 		if IsAPIUserID(userID) {
 			return ResolveAPIAdmin(e.db, userID) // RBAC: API users with role=admin
 		}
@@ -298,13 +289,19 @@ func (e *Evaluator) getUserByUserID(userID uint32) *mumble.User {
 }
 
 func (e *Evaluator) defaultRootPerms(userID uint32) uint32 {
-	// Fallback when no ACLs: match default root ACLs
-	var p uint32
-	// all: Traverse, Enter
-	p |= uint32(mumble.PermissionTraverse | mumble.PermissionEnter)
-	// auth: Speak, TextMessage, MakeTempChannel, SelfRegister
-	if userID > 0 {
-		p |= uint32(mumble.PermissionSpeak | mumble.PermissionTextMessage | mumble.PermissionMakeTempChannel | mumble.PermissionSelfRegister)
+	// Murmur baseline: everyone gets these by default.
+	p := uint32(mumble.PermissionTraverse | mumble.PermissionEnter |
+		mumble.PermissionSpeak | mumble.PermissionWhisper |
+		mumble.PermissionTextMessage | mumble.PermissionListen)
+	// Registered users additionally get self-service permissions.
+	if userID > 0 && !IsAPIUserID(userID) {
+		p |= uint32(mumble.PermissionMakeTempChannel | mumble.PermissionSelfRegister)
+	}
+	if IsAPIUserID(userID) {
+		p |= uint32(mumble.PermissionMakeTempChannel | mumble.PermissionSelfRegister)
+		if ResolveAPIAdmin(e.db, userID) {
+			p |= uint32(mumble.PermissionWrite)
+		}
 	}
 	return p
 }

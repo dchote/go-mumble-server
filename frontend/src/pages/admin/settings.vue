@@ -5,18 +5,6 @@
       <v-form @submit.prevent="handleSave">
         <v-alert v-if="error" type="error" density="compact" class="mb-4">{{ error }}</v-alert>
         <v-alert v-if="success" type="success" density="compact" class="mb-4">Settings saved.</v-alert>
-        <v-select
-          v-model="form.security_mode"
-          label="Security mode"
-          :items="[
-            { title: 'Legacy', value: 'legacy' },
-            { title: 'Secure', value: 'secure' },
-          ]"
-          variant="outlined"
-          density="compact"
-          hide-details="auto"
-          class="mb-4"
-        />
         <v-text-field
           v-model="form.host"
           label="Bind address"
@@ -77,7 +65,6 @@ import StandardCard from '@/components/common/StandardCard.vue'
 import api from '@/utils/api'
 
 const form = ref({
-  security_mode: 'legacy',
   host: '0.0.0.0',
   mumble_port: 64738,
   rest_port: 64730,
@@ -92,7 +79,6 @@ onMounted(async () => {
   try {
     const data = await api.get('/meta/config')
     form.value = {
-      security_mode: data.security_mode || 'legacy',
       host: data.host || '0.0.0.0',
       mumble_port: data.mumble_port ?? 64738,
       rest_port: data.rest_port ?? 64730,

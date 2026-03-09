@@ -5,7 +5,7 @@
         <BackButton fallback="/servers" class="mr-2" />
         <span class="text-h5 header-truncate">{{ server?.name || `Server ${serverId}` }}</span>
         <v-spacer />
-        <v-menu location="bottom end">
+        <v-menu v-if="isAdmin" location="bottom end">
           <template #activator="{ props: menuProps }">
             <v-btn v-bind="menuProps" icon="mdi-dots-vertical" variant="text" size="small" />
           </template>
@@ -38,7 +38,7 @@
         <h3 class="text-subtitle-1 font-weight-bold mb-0">Channels</h3>
         <v-spacer />
         <v-btn
-          v-if="serverId"
+          v-if="serverId && isAdmin"
           size="small"
           variant="elevated"
           color="primary"
@@ -54,6 +54,8 @@
         :channels="channelTree"
         :server-id="serverId"
         :users="users"
+        :can-manage-users="isAdmin"
+        :show-sensitive-user-data="isAdmin"
         @create-sub="openCreateChannel"
         @edit="openEditChannel"
         @acl="openACL"
@@ -61,14 +63,14 @@
         @user-action="handleUserAction"
       />
 
-      <div class="section-header d-flex align-center mt-6 mb-2">
+      <div v-if="isAdmin" class="section-header d-flex align-center mt-6 mb-2">
         <h3 class="text-subtitle-1 font-weight-bold mb-0">Bans</h3>
         <v-spacer />
         <v-btn size="small" variant="outlined" @click="showAddBan = true">Add ban</v-btn>
       </div>
-      <v-progress-linear v-if="bansLoading" indeterminate class="mb-2" />
-      <p v-else-if="bans.length === 0" class="text-body-2 mb-2">No bans.</p>
-      <v-table v-else density="comfortable" class="mb-4">
+      <v-progress-linear v-if="isAdmin && bansLoading" indeterminate class="mb-2" />
+      <p v-else-if="isAdmin && bans.length === 0" class="text-body-2 mb-2">No bans.</p>
+      <v-table v-else-if="isAdmin" density="comfortable" class="mb-4">
         <thead>
           <tr>
             <th>Address / Hash</th>
@@ -87,14 +89,14 @@
         </tbody>
       </v-table>
 
-      <div class="section-header d-flex align-center mb-2">
+      <div v-if="isAdmin" class="section-header d-flex align-center mb-2">
         <h3 class="text-subtitle-1 font-weight-bold mb-0">Registered users</h3>
         <v-spacer />
         <v-btn size="small" variant="outlined" @click="showAddRegUser = true">Register user</v-btn>
       </div>
-      <v-progress-linear v-if="regUsersLoading" indeterminate class="mb-2" />
-      <p v-else-if="regUsers.length === 0" class="text-body-2 mb-2">No registered users.</p>
-      <v-table v-else density="comfortable" class="mb-4">
+      <v-progress-linear v-if="isAdmin && regUsersLoading" indeterminate class="mb-2" />
+      <p v-else-if="isAdmin && regUsers.length === 0" class="text-body-2 mb-2">No registered users.</p>
+      <v-table v-else-if="isAdmin" density="comfortable" class="mb-4">
         <thead>
           <tr>
             <th>Name</th>
@@ -257,6 +259,7 @@
 <script setup>
 import { ref, computed, onMounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import { useStore } from 'vuex'
 import StandardCard from '@/components/common/StandardCard.vue'
 import BackButton from '@/components/common/BackButton.vue'
 import StandardDialog from '@/components/common/StandardDialog.vue'
@@ -270,6 +273,7 @@ import api from '@/utils/api'
 
 const route = useRoute()
 const router = useRouter()
+const store = useStore()
 const server = ref(null)
 const channelTree = ref([])
 const users = ref([])
@@ -290,6 +294,7 @@ const showEditDialog = ref(false)
 const showDeleteConfirm = ref(false)
 
 const serverId = computed(() => route.params.id)
+const isAdmin = computed(() => store.getters['auth/isAdmin'])
 
 function countChannels(channels) {
   if (!channels?.length) return 0
@@ -339,6 +344,7 @@ function openDeleteChannel(ch) {
 }
 
 function handleUserAction({ user, action }) {
+  if (!isAdmin.value) return
   if (action === 'mute') {
     muteTarget.value = user
     showMuteDialog.value = true
@@ -354,6 +360,7 @@ function handleUserAction({ user, action }) {
 }
 
 async function confirmMute() {
+  if (!isAdmin.value) return
   if (!muteTarget.value) return
   userActionLoading.value = true
   try {
@@ -369,6 +376,7 @@ async function confirmMute() {
 }
 
 async function confirmKick() {
+  if (!isAdmin.value) return
   if (!kickTarget.value) return
   userActionLoading.value = true
   try {
@@ -385,6 +393,7 @@ async function confirmKick() {
 }
 
 async function confirmBan() {
+  if (!isAdmin.value) return
   if (!banTarget.value) return
   userActionLoading.value = true
   try {
@@ -401,6 +410,7 @@ async function confirmBan() {
   }
 }
 async function confirmDeleteServer() {
+  if (!isAdmin.value) return
   if (!server.value?.id) return
   deleteServerLoading.value = true
   try {
@@ -415,6 +425,7 @@ async function confirmDeleteServer() {
 }
 
 async function confirmDeleteChannel() {
+  if (!isAdmin.value) return
   if (!deletingChannel.value) return
   deleteChannelLoading.value = true
   try {
@@ -461,6 +472,11 @@ async function loadUsers() {
 }
 
 async function loadBans() {
+  if (!isAdmin.value) {
+    bans.value = []
+    bansLoading.value = false
+    return
+  }
   bansLoading.value = true
   try {
     bans.value = await api.get(`/servers/${serverId.value}/bans`)
@@ -472,6 +488,7 @@ async function loadBans() {
 }
 
 async function submitBan() {
+  if (!isAdmin.value) return
   if (!newBan.value.address && !newBan.value.hash) {
     error.value = 'Address or hash required'
     return
@@ -494,6 +511,7 @@ async function submitBan() {
 }
 
 async function deleteBan(b) {
+  if (!isAdmin.value) return
   try {
     await api.delete(`/servers/${serverId.value}/bans/${b.id}`)
     loadBans()
@@ -503,6 +521,11 @@ async function deleteBan(b) {
 }
 
 async function loadRegUsers() {
+  if (!isAdmin.value) {
+    regUsers.value = []
+    regUsersLoading.value = false
+    return
+  }
   regUsersLoading.value = true
   try {
     regUsers.value = await api.get(`/servers/${serverId.value}/registered-users`)
@@ -514,6 +537,7 @@ async function loadRegUsers() {
 }
 
 async function submitRegUser() {
+  if (!isAdmin.value) return
   if (!newRegUser.value.name?.trim()) {
     error.value = 'Name is required'
     return
@@ -535,6 +559,7 @@ async function submitRegUser() {
 }
 
 async function deleteRegUser(u) {
+  if (!isAdmin.value) return
   try {
     await api.delete(`/servers/${serverId.value}/registered-users/${u.user_id}`)
     loadRegUsers()
@@ -547,8 +572,10 @@ onMounted(() => {
   loadServer().then(() => {
     loadChannels()
     loadUsers()
-    loadBans()
-    loadRegUsers()
+    if (isAdmin.value) {
+      loadBans()
+      loadRegUsers()
+    }
   })
 })
 
@@ -556,7 +583,22 @@ watch(serverId, () => {
   loadServer()
   loadChannels()
   loadUsers()
-  loadBans()
-  loadRegUsers()
+  if (isAdmin.value) {
+    loadBans()
+    loadRegUsers()
+  } else {
+    bans.value = []
+    regUsers.value = []
+  }
+})
+
+watch(isAdmin, (next) => {
+  if (next) {
+    loadBans()
+    loadRegUsers()
+    return
+  }
+  bans.value = []
+  regUsers.value = []
 })
 </script>

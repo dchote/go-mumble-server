@@ -18,7 +18,7 @@ async function request(path, options = {}) {
     headers,
   })
 
-  if (res.status === 401 || res.status === 403) {
+  if (res.status === 401) {
     store.dispatch('auth/logout')
     router.push('/login')
     throw new Error('Session expired')

@@ -6,7 +6,6 @@ services:
       - "64738:64738/udp"
       - "64730:64730/tcp"
     environment:
-      MUMBLE_SECURITY_MODE: legacy
       MUMBLE_DATABASE_PATH: /data/mumble-server.sqlite
     volumes:
       - mumble-data:/data

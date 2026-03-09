@@ -9,7 +9,6 @@ import (
 
 // MetaConfig holds process-level config loaded from DB.
 type MetaConfig struct {
-	SecurityMode  string
 	Host          string
 	MumblePort    int
 	RESTPort      int
@@ -42,7 +41,6 @@ func LoadMetaConfig(db *gorm.DB) (*MetaConfig, error) {
 		return nil, err
 	}
 	return &MetaConfig{
-		SecurityMode:  m.SecurityMode,
 		Host:          m.Host,
 		MumblePort:    m.MumblePort,
 		RESTPort:      m.RESTPort,
@@ -60,7 +58,6 @@ func UpdateMetaConfig(db *gorm.DB, m *MetaConfig) error {
 		return nil
 	}
 	return db.Model(&models.MetaConfig{}).Where("id = ?", 1).Updates(map[string]interface{}{
-		"security_mode":   m.SecurityMode,
 		"host":            m.Host,
 		"mumble_port":     m.MumblePort,
 		"rest_port":       m.RESTPort,
@@ -107,7 +104,6 @@ func DefaultServerConfig() *ServerConfigData {
 func ConfigForServer(meta *MetaConfig, server *ServerConfigData, bootstrap *Config) *Config {
 	if meta == nil {
 		meta = &MetaConfig{
-			SecurityMode: "legacy",
 			Host:         "0.0.0.0",
 			MumblePort:   64738,
 			RESTPort:     64730,
@@ -120,7 +116,6 @@ func ConfigForServer(meta *MetaConfig, server *ServerConfigData, bootstrap *Conf
 		server = DefaultServerConfig()
 	}
 	cfg := &Config{
-		SecurityMode:   meta.SecurityMode,
 		Host:           meta.Host,
 		MumblePort:     meta.MumblePort,
 		RESTPort:       meta.RESTPort,
@@ -163,7 +158,6 @@ func EnsureMetaConfig(db *gorm.DB, cfg *Config) error {
 	}
 	m = models.MetaConfig{
 		ID:            1,
-		SecurityMode:  cfg.SecurityMode,
 		Host:          cfg.Host,
 		MumblePort:    cfg.MumblePort,
 		RESTPort:      cfg.RESTPort,

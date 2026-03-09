@@ -59,7 +59,7 @@ Each Mumble connection progresses through a well-defined sequence of states from
 └───────────┘
 ```
 
-The security mode affects the TLS handshake, CryptSetup key sizes, and version negotiation. See [protocol/security-modes.md](../protocol/security-modes.md).
+Security is negotiated per client during the Version exchange; CryptSetup key size signals the tier (0/16/32 bytes). See [protocol/security-modes.md](../protocol/security-modes.md).
 
 ## Connection States
 
@@ -122,7 +122,7 @@ A separate write goroutine (or buffered channel) serializes outbound messages to
 
 ### State Synchronization
 
-After authentication, the server sends the full world state:
+After authentication, the server sends the full world state via `sendSync` (CryptSetup, channels, users, ServerConfig, ServerSync). The connection is registered for UDP routing only after `sendSync` completes, so `HandleUDP` never sees a connection with uninitialized crypto state.
 
 1. All `ChannelState` messages (depth-first from root). `channel_id` is always emitted (root = 0); root omits the `parent` field (proto2 optional).
 2. All `UserState` messages for connected users. `session` and `channel_id` are always emitted (users in root have `channel_id` 0).

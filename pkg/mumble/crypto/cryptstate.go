@@ -17,7 +17,8 @@ import (
 type Mode int
 
 const (
-	ModeLegacy Mode = iota
+	ModeLite   Mode = iota
+	ModeLegacy
 	ModeSecure
 )
 
@@ -67,8 +68,16 @@ func NewCryptState(mode Mode) *CryptState {
 	return &CryptState{mode: mode}
 }
 
+// Mode returns the encryption mode.
+func (c *CryptState) Mode() Mode {
+	return c.mode
+}
+
 // EncNonce returns a copy of the encryption nonce (for CryptSetup resync response).
 func (c *CryptState) EncNonce() []byte {
+	if c.mode == ModeLite {
+		return nil
+	}
 	if c.mode == ModeLegacy {
 		out := make([]byte, 16)
 		copy(out, c.encNonce[:])
@@ -79,6 +88,9 @@ func (c *CryptState) EncNonce() []byte {
 
 // SetDecNonce updates the decryption nonce (when client sends ClientNonce during resync).
 func (c *CryptState) SetDecNonce(nonce []byte) error {
+	if c.mode == ModeLite {
+		return nil
+	}
 	if c.mode == ModeLegacy {
 		if len(nonce) != legacyNonceSize {
 			return errors.New("crypto: legacy dec nonce must be 16 bytes")
@@ -91,6 +103,9 @@ func (c *CryptState) SetDecNonce(nonce []byte) error {
 
 // SetKey configures the key and nonces (from CryptSetup message).
 func (c *CryptState) SetKey(key, encNonce, decNonce []byte) error {
+	if c.mode == ModeLite {
+		return nil // lite mode uses no key
+	}
 	if c.mode == ModeLegacy {
 		if len(key) != legacyKeySize || len(encNonce) != legacyNonceSize || len(decNonce) != legacyNonceSize {
 			return errors.New("crypto: legacy key/nonce size mismatch")
@@ -121,6 +136,9 @@ func (c *CryptState) SetKey(key, encNonce, decNonce []byte) error {
 
 // GenerateKey creates random key and nonces for the configured mode.
 func (c *CryptState) GenerateKey() error {
+	if c.mode == ModeLite {
+		return nil
+	}
 	if c.mode == ModeLegacy {
 		key := make([]byte, legacyKeySize)
 		encN := make([]byte, legacyNonceSize)
@@ -145,6 +163,9 @@ func (c *CryptState) GenerateKey() error {
 
 // Overhead returns the per-packet encryption overhead in bytes.
 func (c *CryptState) Overhead() int {
+	if c.mode == ModeLite {
+		return 0
+	}
 	if c.mode == ModeLegacy {
 		return legacyOverhead
 	}
@@ -153,6 +174,10 @@ func (c *CryptState) Overhead() int {
 
 // Encrypt encrypts src into dst. Dst must have length len(src)+Overhead().
 func (c *CryptState) Encrypt(dst, src []byte) error {
+	if c.mode == ModeLite {
+		copy(dst, src)
+		return nil
+	}
 	if c.mode == ModeLegacy {
 		return c.encryptLegacy(dst, src)
 	}
@@ -161,6 +186,10 @@ func (c *CryptState) Encrypt(dst, src []byte) error {
 
 // Decrypt decrypts src into dst. Returns error on failure.
 func (c *CryptState) Decrypt(dst, src []byte) error {
+	if c.mode == ModeLite {
+		copy(dst, src)
+		return nil
+	}
 	if c.mode == ModeLegacy {
 		return c.decryptLegacy(dst, src)
 	}

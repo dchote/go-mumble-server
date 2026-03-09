@@ -7,7 +7,7 @@
       density="compact"
       @click="onRowClick"
     >
-      <template v-if="serverId" #append>
+      <template v-if="serverId && canManageUsers" #append>
         <div class="d-flex align-center" @click.stop>
           <v-chip v-if="channelUsers.length > 0" size="x-small" variant="tonal" density="compact" class="mr-2">
             {{ channelUsers.length }}
@@ -37,7 +37,7 @@
         :key="u.session_id"
         density="compact"
         class="channel-user pl-4"
-        :subtitle="u.address || '-'"
+        :subtitle="showSensitiveUserData ? (u.address || '-') : undefined"
       >
         <template #prepend>
           <v-icon size="x-small" :color="u.self_mute || u.mute ? 'warning' : (u.self_deaf || u.deaf ? 'default' : 'success')">
@@ -47,6 +47,16 @@
         <v-list-item-title class="text-body-2">{{ u.name || u.username || 'Unknown' }}</v-list-item-title>
         <template #append>
           <div class="d-flex align-center">
+            <v-chip
+              v-if="(u.crypto_mode || u.cryptoMode)"
+              size="x-small"
+              variant="tonal"
+              density="compact"
+              color="secondary"
+              class="mr-1"
+            >
+              {{ (u.crypto_mode || u.cryptoMode) }}
+            </v-chip>
             <v-chip
               v-if="u.is_admin || u.isAdmin"
               size="x-small"
@@ -97,7 +107,7 @@
             >
               Deaf
             </v-chip>
-            <v-menu v-if="serverId" location="bottom end" @click.stop>
+            <v-menu v-if="serverId && canManageUsers" location="bottom end" @click.stop>
               <template #activator="{ props: menuProps }">
                 <v-btn icon="mdi-dots-vertical" variant="text" size="x-small" v-bind="menuProps" class="ml-1" />
               </template>
@@ -122,6 +132,8 @@
         :channel="child"
         :server-id="serverId"
         :users="users"
+        :can-manage-users="canManageUsers"
+        :show-sensitive-user-data="showSensitiveUserData"
         @create-sub="$emit('create-sub', $event)"
         @edit="$emit('edit', $event)"
         @acl="$emit('acl', $event)"
@@ -148,6 +160,14 @@ const props = defineProps({
   users: {
     type: Array,
     default: () => [],
+  },
+  canManageUsers: {
+    type: Boolean,
+    default: false,
+  },
+  showSensitiveUserData: {
+    type: Boolean,
+    default: false,
   },
 })
 const emit = defineEmits(['create-sub', 'edit', 'acl', 'delete', 'user-action'])

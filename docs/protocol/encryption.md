@@ -4,13 +4,13 @@
 
 ## Overview
 
-go-mumble-server uses layered encryption that varies by [security mode](security-modes.md):
+go-mumble-server uses layered encryption; the UDP cipher is [negotiated per client](security-modes.md):
 
-1. **TLS** for the TCP control channel — TLS 1.2+ in legacy mode, TLS 1.3 only in secure mode.
-2. **AEAD cipher** for UDP voice packets — OCB2-AES128 in legacy mode, AES-256-GCM in secure mode.
+1. **TLS** for the TCP control channel — TLS 1.2+ (permissive; client may negotiate 1.2 or 1.3).
+2. **AEAD cipher** for UDP voice — OCB2-AES128 (legacy), AES-256-GCM (secure), or none (lite).
 3. **Local storage encryption** — AES-256 encrypted database regardless of mode.
 
-The security mode is a server-wide toggle. See [security-modes.md](security-modes.md) for the full comparison and rationale.
+See [security-modes.md](security-modes.md) for the negotiated tiers and rationale.
 
 ## TLS (Control Channel)
 
@@ -21,33 +21,17 @@ The security mode is a server-wide toggle. See [security-modes.md](security-mode
 3. Client optionally (legacy) or mandatorily (secure) presents a client certificate.
 4. TLS handshake completes; all subsequent TCP traffic is encrypted.
 
-### Mode Differences
+### TLS Configuration
 
-| Aspect | Legacy | Secure |
-|--------|--------|--------|
-| Minimum TLS | 1.2 | 1.3 |
-| Maximum TLS | (any) | 1.3 |
-| Client certs | Optional (`RequestClientCert`) | Required (`RequireAnyClientCert`) |
-| Cipher suites | Go defaults | TLS 1.3 only (AES-256-GCM, ChaCha20-Poly1305) |
+The server uses permissive TLS to support all client tiers:
 
-### Go Implementation
+| Aspect | Value |
+|--------|-------|
+| Minimum TLS | 1.2 |
+| Client certs | Optional (`RequestClientCert`) |
+| Cipher suites | Go defaults |
 
-```go
-// Legacy mode
-tlsConfig := &tls.Config{
-    Certificates: []tls.Certificate{serverCert},
-    ClientAuth:   tls.RequestClientCert,
-    MinVersion:   tls.VersionTLS12,
-}
-
-// Secure mode
-tlsConfig := &tls.Config{
-    Certificates: []tls.Certificate{serverCert},
-    ClientAuth:   tls.RequireAnyClientCert,
-    MinVersion:   tls.VersionTLS13,
-    MaxVersion:   tls.VersionTLS13,
-}
-```
+Per-client security (legacy vs secure) is negotiated after the TLS handshake via the Version message. Secure tier requires TLS 1.3 and a client certificate; the server inspects the negotiated TLS state when selecting the crypto tier.
 
 ### Server Certificate
 
@@ -72,10 +56,9 @@ Configuration (in `mumble-server.toml`):
 Client certificates serve as persistent identity:
 
 - The certificate fingerprint uniquely identifies a user.
-- **Legacy mode:** SHA-1 of DER-encoded certificate (matches original Mumble).
-- **Secure mode:** SHA-256 of DER-encoded certificate.
+- **Legacy tier:** SHA-1 of DER-encoded certificate (matches original Mumble).
+- **Secure tier:** SHA-256 of DER-encoded certificate (when TLS 1.3 + client cert).
 - Registered users are bound to their certificate — they can reconnect without a password.
-- In secure mode, `RequireAnyClientCert` means all users must present a certificate.
 
 ## UDP Voice Encryption
 

@@ -5,6 +5,7 @@
         <span class="text-h5 header-title">Virtual Servers</span>
         <v-spacer />
         <v-btn
+          v-if="isAdmin"
           color="primary"
           variant="elevated"
           size="small"
@@ -52,17 +53,20 @@
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
+import { computed, ref, onMounted } from 'vue'
+import { useStore } from 'vuex'
 import StandardCard from '@/components/common/StandardCard.vue'
 import CreateServerDialog from '@/components/servers/CreateServerDialog.vue'
 import api from '@/utils/api'
 
+const store = useStore()
 const servers = ref([])
 const status = ref(null)
 const serverStats = ref({})
 const error = ref('')
 const loading = ref(true)
 const showCreate = ref(false)
+const isAdmin = computed(() => store.getters['auth/isAdmin'])
 
 const headers = [
   { title: 'Name', key: 'name', sortable: true },

@@ -12,19 +12,26 @@ type MumbleUserAdapter struct {
 }
 
 // ListConnected returns connected users for REST API with is_admin resolved for display.
-func (a *MumbleUserAdapter) ListConnected(serverID uint, db *gorm.DB) interface{} {
+func (a *MumbleUserAdapter) ListConnected(serverID uint, db *gorm.DB, includeSensitive bool) interface{} {
 	users := a.Manager.ListAll()
 	out := make([]ConnectedUser, len(users))
 	for i, u := range users {
 		isAdmin := db != nil && acl.IsAdminForDisplay(db, serverID, u.UserID)
+		address := ""
+		certHash := ""
+		if includeSensitive {
+			address = u.Address
+			certHash = u.CertHash
+		}
 		out[i] = ConnectedUser{
 			SessionID:       u.SessionID,
 			UserID:          u.UserID,
 			Name:            u.Name,
 			ChannelID:       u.ChannelID,
-			Address:         u.Address,
+			Address:         address,
 			Ping:            u.Ping,
-			CertificateHash: u.CertHash,
+			CertificateHash: certHash,
+			CryptoMode:      u.CryptoMode,
 			SelfMute:        u.SelfMute,
 			SelfDeaf:        u.SelfDeaf,
 			Mute:            u.Mute,

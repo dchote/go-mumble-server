@@ -11,9 +11,6 @@ func TestLoad_Defaults(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load(\"\"): %v", err)
 	}
-	if cfg.SecurityMode != "legacy" {
-		t.Errorf("SecurityMode = %q, want legacy", cfg.SecurityMode)
-	}
 	if cfg.MumblePort != 64738 {
 		t.Errorf("MumblePort = %d, want 64738", cfg.MumblePort)
 	}
@@ -29,9 +26,6 @@ func TestLoad_FromFile(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "mumble-server.toml")
 	toml := `
-[security]
-mode = "secure"
-
 [network]
 port = 64739
 rest_port = 9091
@@ -49,9 +43,6 @@ level = "debug"
 	cfg, err := Load(path)
 	if err != nil {
 		t.Fatalf("Load: %v", err)
-	}
-	if cfg.SecurityMode != "secure" {
-		t.Errorf("SecurityMode = %q, want secure", cfg.SecurityMode)
 	}
 	if cfg.MumblePort != 64739 {
 		t.Errorf("MumblePort = %d, want 64739", cfg.MumblePort)

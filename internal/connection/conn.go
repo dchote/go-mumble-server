@@ -31,9 +31,10 @@ type Conn struct {
 	net.Conn
 	Crypt *crypto.CryptState
 
-	mu        sync.RWMutex
-	state     State
-	sessionID uint32
+	mu               sync.RWMutex
+	state            State
+	sessionID        uint32
+	clientCryptoModes uint32 // bitmask from Version.CryptoModes; 0 = legacy only (standard client)
 	serverID  uint
 	user      *struct {
 		name      string
@@ -129,6 +130,20 @@ func (c *Conn) UserName() string {
 		return ""
 	}
 	return c.user.name
+}
+
+// ClientCryptoModes returns the client's advertised crypto mode bitmask (0 = legacy only).
+func (c *Conn) ClientCryptoModes() uint32 {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.clientCryptoModes
+}
+
+// SetClientCryptoModes stores the client's advertised crypto mode bitmask.
+func (c *Conn) SetClientCryptoModes(m uint32) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.clientCryptoModes = m
 }
 
 // UserChannel returns the user's channel ID.

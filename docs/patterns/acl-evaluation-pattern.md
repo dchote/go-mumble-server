@@ -28,7 +28,7 @@ A group is a named set of users defined on a channel. Groups support inheritance
 | `auth` | Users with a registered account (user ID > 0) |
 | `in` | Users currently in this channel |
 | `out` | Users not currently in this channel |
-| `admin` | SuperUser (0), members of the stored `admin` group, or API users with `role=admin` (RBAC) |
+| `admin` | Members of the stored `admin` group, or API users with `role=admin` (RBAC) |
 | `sub` | Users in sub-channels (with optional path/depth constraints) |
 | `~channel` | Evaluated in the context of the channel being ACL-checked (not the user's current channel) |
 
@@ -65,6 +65,8 @@ To determine permissions for user U in channel C:
 ```
 function evaluateACL(user, channel):
     # Build the ACL chain from root to this channel
+    # Murmur baseline: all users start with these before ACL evaluation
+    granted = Traverse | Enter | Speak | Whisper | TextMessage | Listen
     chain = []
     current = channel
     while current != nil:
@@ -74,7 +76,6 @@ function evaluateACL(user, channel):
             break
         current = current.Parent
 
-    granted = 0
     denied = 0
 
     for each entry in chain:
@@ -97,10 +98,6 @@ function evaluateACL(user, channel):
         granted &= ~entry.Deny
         denied |= entry.Deny
         denied &= ~entry.Grant
-
-    # SuperUser always has Write permission
-    if user is SuperUser:
-        granted |= Write
 
     return granted & ~denied
 ```
@@ -150,15 +147,15 @@ The original Murmur uses `ChanACL::ACLCache` (a per-server `QHash`) that is clea
 
 ## Default ACLs
 
-The root channel (ID 0) has a default ACL:
+The root channel (ID 0) has a default ACL matching Murmur's baseline:
 
 | Group | Permissions |
 |-------|------------|
+| `all` | Grant: `Traverse`, `Enter`, `Speak`, `Whisper`, `TextMessage`, `Listen` |
+| `auth` | Grant: `MakeTempChannel`, `SelfRegister` |
 | `admin` | Grant: `Write` (implies all) |
-| `auth` | Grant: `Speak`, `TextMessage`, `MakeTempChannel`, `SelfRegister` |
-| `all` | Grant: `Traverse`, `Enter` |
 
-SuperUser (user ID 0) is always in the `admin` group and always has `Write` permission.
+All users start with the baseline permissions above; ACL entries add or deny from this set. The `auth` group applies to registered users (userID > 0); `admin` applies to stored admin group members or API users with `role=admin`.
 
 ## RBAC Strategy (API Users)
 
@@ -166,7 +163,7 @@ Management API users (`users` table) can authenticate to Mumble with their web c
 
 | User Type | userID | @admin | @auth |
 |-----------|--------|--------|-------|
-| SuperUser (unauthenticated / server password) | 0 | ✓ | ✗ |
+| Unregistered (guest / server password) | 0 | ✗ | ✗ |
 | Registered user (per-server) | 1, 2, 3… | If in stored admin group | ✓ |
 | API admin (role=admin) | 0x80000000 \| users.id | ✓ | ✓ |
 | API user (role=user) | 0x80000000 \| users.id | ✗ | ✓ |

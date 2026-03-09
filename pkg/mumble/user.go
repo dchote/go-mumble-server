@@ -23,4 +23,6 @@ type User struct {
 	// CertHash is the SHA-1 hex fingerprint of the client's TLS certificate (lowercase).
 	// Empty if the client did not present a certificate.
 	CertHash string
+	// CryptoMode is the negotiated UDP crypto tier: "lite", "legacy", or "secure".
+	CryptoMode string
 }

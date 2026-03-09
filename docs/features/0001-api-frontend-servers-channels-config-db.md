@@ -36,8 +36,8 @@
 - REST: GET/PUT /api/v1/servers/{id}/channels/{channelId}/acl
 - ACLDialog (editable) in channel context menu — add/remove groups and ACL rules, permission checkboxes
 - Full ACL evaluator: `internal/acl/evaluator.go` — DB-backed, in-memory cache, meta groups (@all, @in, @out, @sub, @auth, @admin), token groups, eval-locality (~), inversion (!)
-- Default root ACLs seeded on server/channel creation: `all` (Traverse, Enter), `auth` (Speak, TextMessage, MakeTempChannel, SelfRegister), `admin` (Write)
-- SuperUser (user ID 0) always has Write; UserID from registered_users or API users; API users get synthetic userIDs and RBAC roles for @admin
+- Default root ACLs seeded on server/channel creation: `all` (Traverse, Enter, Speak, Whisper, TextMessage, Listen), `auth` (MakeTempChannel, SelfRegister), `admin` (Write)
+- UserID from registered_users or API users; unregistered users get 0; API users get synthetic userIDs and RBAC roles for @admin
 
 ### Phase 5: Bans
 - REST: GET/POST/DELETE /api/v1/servers/{id}/bans, bans/{banId}

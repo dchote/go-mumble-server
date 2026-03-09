@@ -11,7 +11,7 @@ type CryptSetup struct {
 
 func (m *CryptSetup) Marshal() ([]byte, error) {
 	var b []byte
-	if len(m.Key) > 0 {
+	if m.Key != nil {
 		b = wire.AppendBytes(b, 1, m.Key)
 	}
 	if len(m.ClientNonce) > 0 {

@@ -24,12 +24,15 @@ func EnsureDefaultRootACLs(db *gorm.DB, serverID uint) error {
 			return err
 		}
 	}
-	// Default ACLs: all, auth, admin
+	// Default ACLs matching murmur baseline: all users can speak/listen,
+	// registered users get self-service perms, admin gets full control.
 	acls := []models.ChannelACL{
 		{Priority: 1, ApplyHere: true, ApplySubs: true, GroupName: "all",
-			Grant: uint32(mumble.PermissionTraverse | mumble.PermissionEnter)},
+			Grant: uint32(mumble.PermissionTraverse | mumble.PermissionEnter |
+				mumble.PermissionSpeak | mumble.PermissionWhisper |
+				mumble.PermissionTextMessage | mumble.PermissionListen)},
 		{Priority: 2, ApplyHere: true, ApplySubs: true, GroupName: "auth",
-			Grant: uint32(mumble.PermissionSpeak | mumble.PermissionTextMessage | mumble.PermissionMakeTempChannel | mumble.PermissionSelfRegister)},
+			Grant: uint32(mumble.PermissionMakeTempChannel | mumble.PermissionSelfRegister)},
 		{Priority: 3, ApplyHere: true, ApplySubs: true, GroupName: "admin",
 			Grant: uint32(mumble.PermissionWrite)},
 	}

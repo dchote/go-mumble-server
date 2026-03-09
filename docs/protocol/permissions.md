@@ -101,22 +101,15 @@ func (p Permission) Has(check Permission) bool {
 
 ## Default Root Channel ACLs
 
-The root channel ships with these default ACL entries:
+The root channel ships with default ACL entries matching Murmur's baseline:
 
 | Priority | Group | Apply Here | Apply Subs | Grant | Deny |
 |----------|-------|------------|------------|-------|------|
-| 1 | `all` | yes | yes | `Traverse`, `Enter` | — |
-| 2 | `auth` | yes | yes | `Speak`, `TextMessage`, `MakeTempChannel`, `SelfRegister` | — |
+| 1 | `all` | yes | yes | `Traverse`, `Enter`, `Speak`, `Whisper`, `TextMessage`, `Listen` | — |
+| 2 | `auth` | yes | yes | `MakeTempChannel`, `SelfRegister` | — |
 | 3 | `admin` | yes | yes | `Write` | — |
 
-## SuperUser
-
-User ID 0 is the SuperUser account:
-
-- Always a member of the `admin` group on every channel.
-- Always has `Write` permission regardless of ACLs.
-- Cannot be kicked, banned, or have permissions denied.
-- Does not count against user limits.
+All users receive the baseline permissions; ACL entries add or deny from this set. User ID 0 denotes unregistered (guest) users and receives permissions through normal ACL evaluation like any other user.
 
 ## Reference
 

@@ -8,7 +8,6 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
-	"strings"
 	"sync"
 	"time"
 
@@ -83,7 +82,7 @@ func (s *Server) Start(ctx context.Context) error {
 	mumbleAddr := formatAddr(cfg.Host, cfg.MumblePort)
 	restAddr := formatAddr(cfg.Host, cfg.RESTPort)
 
-	tcpLn, err := transport.TCPListener(ctx, mumbleAddr, certPEM, keyPEM, cfg.SecurityMode)
+	tcpLn, err := transport.TCPListener(ctx, mumbleAddr, certPEM, keyPEM)
 	if err != nil {
 		return err
 	}
@@ -179,15 +178,6 @@ func formatAddr(host string, port int) string {
 }
 
 func (s *Server) acceptLoop(ctx context.Context, ln net.Listener, ms *mumble.Server) error {
-	meta, _ := config.LoadMetaConfig(s.db)
-	securityMode := "legacy"
-	if meta != nil {
-		securityMode = meta.SecurityMode
-	}
-	mode := crypto.ModeLegacy
-	if strings.ToLower(securityMode) == "secure" {
-		mode = crypto.ModeSecure
-	}
 	for {
 		raw, err := ln.Accept()
 		if err != nil {
@@ -196,7 +186,7 @@ func (s *Server) acceptLoop(ctx context.Context, ln net.Listener, ms *mumble.Ser
 			}
 			return err
 		}
-		crypt := crypto.NewCryptState(mode)
+		crypt := crypto.NewCryptState(crypto.ModeLegacy)
 		remoteAddr := raw.RemoteAddr().String()
 		slog.Info("Mumble client connected", "remote", remoteAddr)
 		conn := connection.New(raw, crypt, func(c *connection.Conn) {
@@ -217,9 +207,10 @@ func (s *Server) acceptLoop(ctx context.Context, ln net.Listener, ms *mumble.Ser
 		})
 		go func() {
 			_ = conn.WriteMessage(protocol.MessageVersion, &messages.Version{
-				Release: "go-mumble-server",
-				OS:      "Go",
-				OSVersion: "1.0",
+				Release:     "go-mumble-server",
+				OS:          "Go",
+				OSVersion:   "1.0",
+				CryptoModes: 0x07, // lite(1) | legacy(2) | secure(4) — server supports all
 			})
 			_ = conn.Run(ctx, ms.HandlerTable())
 		}()

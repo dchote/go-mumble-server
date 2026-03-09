@@ -44,13 +44,17 @@ The server is built on top of the protocol library and adds:
 
 ## Security Modes
 
-go-mumble-server supports two protocol security modes, toggled by a single configuration setting:
+go-mumble-server negotiates security **per client** during the Version exchange. Three tiers are supported:
 
-- **Legacy mode** (`security-mode = "legacy"`, default) — 100% backward compatible with all existing Mumble clients. Uses the original protocol encryption: TLS 1.2+, OCB2-AES128 for UDP voice, SHA-1 certificate fingerprints.
+- **Legacy** (default) — 100% backward compatible with all existing Mumble clients. OCB2-AES128 for UDP voice, TLS 1.2+.
 
-- **Secure mode** (`security-mode = "secure"`) — Breaks backward compatibility to implement modern cryptography. TLS 1.3 only, AES-256-GCM for UDP voice (replacing the broken OCB2), SHA-256 certificate fingerprints, Argon2id password hashing, mandatory client certificates. Only secure-mode-aware clients can connect.
+- **Secure** — Modern cryptography for clients that support it. AES-256-GCM for UDP voice, TLS 1.3, mandatory client certificates. Clients advertise this capability; the server upgrades when both support it.
 
-**Local storage is always encrypted with modern algorithms regardless of mode** — the SQLite database uses AES-256 encryption at rest, passwords are always stored as Argon2id hashes, and configuration secrets support encryption. The security mode only affects the wire protocol.
+- **Lite** — No UDP encryption (cleartext voice) for constrained devices (e.g. ESP32) on trusted networks. Control channel remains TLS-encrypted.
+
+Standard Mumble clients omit capability negotiation and default to legacy. Mixed client populations are supported: a desktop client may use legacy while a secure-aware client uses secure on the same server.
+
+**Password storage** — Management UI (API) user passwords are hashed with bcrypt. Mumble registered-user passwords are stored as Argon2id hashes. SQLite storage is not encrypted at rest in the current implementation; rely on filesystem or deployment-level encryption if required.
 
 See [protocol/security-modes.md](protocol/security-modes.md) for the full design.
 
@@ -66,7 +70,7 @@ go-mumble-server implements the complete Mumble server feature set:
 - **Whisper / voice targets** — Directed audio to specific users, channels, or ACL groups.
 - **Channel listeners** — Users can listen to channels without joining them.
 - **Server configuration** — Bandwidth limits, rate limiting, user limits, channel constraints, and welcome messages.
-- **Encryption** — TLS for control, AEAD cipher for voice (OCB2-AES128 legacy / AES-256-GCM secure), AES-256 encrypted storage.
+- **Encryption** — TLS for control, AEAD cipher for voice (OCB2-AES128 legacy / AES-256-GCM secure).
 - **Virtual servers** — Multiple logical servers within a single process.
 
 ## Web Management UI
@@ -102,8 +106,7 @@ go-mumble-server targets full compatibility with the Mumble protocol as defined 
 
 - **Control channel** — TCP with TLS, Mumble protocol messages (27 message types, native Go encoding)
 - **Voice channel** — UDP with AEAD encryption, or tunneled over TCP
-- **Legacy mode** — Compatible with Mumble desktop clients, Plumble (Android), and any client implementing the standard protocol
-- **Secure mode** — Compatible with secure-mode-aware clients only
+- **Per-client negotiation** — Legacy (default), secure, or lite; standard Mumble clients use legacy automatically
 - **Version negotiation** — Supports protocol version exchange and codec negotiation (Opus preferred, CELT fallback)
 
 ## Target Users

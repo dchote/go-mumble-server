@@ -101,7 +101,6 @@ const actions = {
       return { hasUsers }
     } catch (e) {
       if (token) {
-        console.log('[auth/checkAuthStatus] Token validation failed:', e)
         commit('clearAuth')
         return { valid: false }
       }

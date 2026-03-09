@@ -25,3 +25,21 @@ func TestVersion_MarshalUnmarshal(t *testing.T) {
 		t.Errorf("round-trip mismatch: got %+v", v2)
 	}
 }
+
+func TestVersion_CryptoModes(t *testing.T) {
+	v := &Version{
+		Release:     "client 1.0",
+		CryptoModes: 0x07,
+	}
+	data, err := v.Marshal()
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	var v2 Version
+	if err := v2.Unmarshal(data); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if v2.CryptoModes != 0x07 {
+		t.Errorf("CryptoModes = %d, want 7", v2.CryptoModes)
+	}
+}

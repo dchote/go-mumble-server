@@ -6,10 +6,6 @@
 # web management UI. Only database.path, tls.cert, tls.key, logging.level, and
 # frontend-embed (flag) remain in this file permanently.
 
-[security]
-# Protocol security mode: "legacy" (compatible with all Mumble clients) or "secure" (modern crypto)
-mode = "legacy"
-
 [network]
 # Mumble protocol port (TCP + UDP)
 port = 64738

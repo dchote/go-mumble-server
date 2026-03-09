@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/dchote/go-mumble-server/api"
 	"github.com/dchote/go-mumble-server/internal/channel"
@@ -20,18 +21,19 @@ import (
 
 // ConnectedUser is a connected Mumble user for the REST API.
 type ConnectedUser struct {
-	SessionID     uint32  `json:"session_id"`
-	UserID        uint32  `json:"user_id"`
-	Name          string  `json:"name"`
-	ChannelID     uint32  `json:"channel_id"`
-	Address       string  `json:"address"`
-	Ping          float32 `json:"ping"`
-	CertificateHash string `json:"certificate_hash,omitempty"` // SHA-1 hex of client cert; empty if none
-	SelfMute      bool    `json:"self_mute"`
-	SelfDeaf      bool    `json:"self_deaf"`
-	Mute          bool    `json:"mute"`
-	Deaf          bool    `json:"deaf"`
-	IsAdmin       bool    `json:"is_admin"`
+	SessionID       uint32  `json:"session_id"`
+	UserID          uint32  `json:"user_id"`
+	Name            string  `json:"name"`
+	ChannelID       uint32  `json:"channel_id"`
+	Address         string  `json:"address"`
+	Ping            float32 `json:"ping"`
+	CertificateHash string  `json:"certificate_hash,omitempty"` // SHA-1 hex of client cert; empty if none
+	CryptoMode      string  `json:"crypto_mode,omitempty"`      // Negotiated UDP crypto tier: lite, legacy, secure
+	SelfMute        bool    `json:"self_mute"`
+	SelfDeaf        bool    `json:"self_deaf"`
+	Mute            bool    `json:"mute"`
+	Deaf            bool    `json:"deaf"`
+	IsAdmin         bool    `json:"is_admin"`
 }
 
 // GetChannelManager returns the channel manager for a server ID, or nil.
@@ -69,28 +71,37 @@ func RouterWithMumble(db *gorm.DB, cfg *config.Config, feFS fs.FS, userLister ha
 
 	r.Get("/docs", swaggerUIHandler)
 
+	authRateLimit := middleware.NewAuthRateLimit(20, time.Minute)
 	r.Route("/api/v1", func(r chi.Router) {
 		r.Get("/auth/status", authHandler.Status)
-		r.Post("/auth/register", authHandler.Register)
-		r.Post("/auth/login", authHandler.Login)
+		r.Group(func(r chi.Router) {
+			r.Use(authRateLimit.Handler)
+			r.Post("/auth/register", authHandler.Register)
+			r.Post("/auth/login", authHandler.Login)
+		})
 
 		r.Group(func(r chi.Router) {
 			r.Use(middleware.Auth(true, db, cfg, userSvc))
 			r.Get("/status", serverHandler.Status)
 			r.Get("/servers", serverHandler.List)
-			r.Post("/servers", serverHandler.Create)
 			r.Get("/servers/{id}", serverHandler.Get)
+			r.Get("/servers/{id}/config", serverHandler.GetConfig)
+			r.Get("/servers/{id}/channels", serverHandler.GetChannels)
+			r.Get("/servers/{id}/users", serverHandler.GetUsers)
+		})
+
+		r.Group(func(r chi.Router) {
+			r.Use(middleware.Auth(true, db, cfg, userSvc))
+			r.Use(middleware.RequireRole("admin"))
+			r.Post("/servers", serverHandler.Create)
 			r.Patch("/servers/{id}", serverHandler.Update)
 			r.Delete("/servers/{id}", serverHandler.Delete)
-			r.Get("/servers/{id}/config", serverHandler.GetConfig)
 			r.Patch("/servers/{id}/config", serverHandler.UpdateConfig)
-			r.Get("/servers/{id}/channels", serverHandler.GetChannels)
 			r.Post("/servers/{id}/channels", serverHandler.CreateChannel)
 			r.Patch("/servers/{id}/channels/{channelId}", serverHandler.UpdateChannel)
 			r.Delete("/servers/{id}/channels/{channelId}", serverHandler.DeleteChannel)
 			r.Get("/servers/{id}/channels/{channelId}/acl", aclHandler.Get)
 			r.Put("/servers/{id}/channels/{channelId}/acl", aclHandler.Put)
-			r.Get("/servers/{id}/users", serverHandler.GetUsers)
 			r.Post("/servers/{id}/users/{sessionId}/kick", serverHandler.KickUser)
 			r.Post("/servers/{id}/users/{sessionId}/mute", serverHandler.MuteUser)
 			r.Post("/servers/{id}/users/{sessionId}/ban", serverHandler.BanUser)
@@ -101,11 +112,6 @@ func RouterWithMumble(db *gorm.DB, cfg *config.Config, feFS fs.FS, userLister ha
 			r.Post("/servers/{id}/registered-users", regUserHandler.Create)
 			r.Patch("/servers/{id}/registered-users/{userId}", regUserHandler.Update)
 			r.Delete("/servers/{id}/registered-users/{userId}", regUserHandler.Delete)
-		})
-
-		r.Group(func(r chi.Router) {
-			r.Use(middleware.Auth(true, db, cfg, userSvc))
-			r.Use(middleware.RequireRole("admin"))
 			r.Get("/users", userHandler.List)
 			r.Patch("/users/{id}", userHandler.Update)
 			r.Delete("/users/{id}", userHandler.Delete)
