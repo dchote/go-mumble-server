@@ -24,11 +24,11 @@ type ConnectedUser struct {
 	UserID    uint32 `json:"user_id"`
 	Name      string `json:"name"`
 	ChannelID uint32 `json:"channel_id"`
-}
-
-// ConnectedUserLister lists connected Mumble users for REST.
-type ConnectedUserLister interface {
-	ListConnected() interface{}
+	SelfMute  bool   `json:"self_mute"`
+	SelfDeaf  bool   `json:"self_deaf"`
+	Mute      bool   `json:"mute"`
+	Deaf      bool   `json:"deaf"`
+	IsAdmin   bool   `json:"is_admin"`
 }
 
 // Router sets up the REST API and optionally serves the embedded SPA.
@@ -44,7 +44,7 @@ type GetChannelManager func(serverID uint) *channel.Manager
 type OnACLChange func(serverID uint)
 
 // RouterWithMumble sets up the REST API with optional Mumble connected-user listing.
-func RouterWithMumble(db *gorm.DB, cfg *config.Config, feFS fs.FS, userLister ConnectedUserLister, getChanMgr GetChannelManager, onACLChange OnACLChange, onChannelMutated handler.OnChannelMutated) http.Handler {
+func RouterWithMumble(db *gorm.DB, cfg *config.Config, feFS fs.FS, userLister handler.ConnectedUserLister, getChanMgr GetChannelManager, onACLChange OnACLChange, onChannelMutated handler.OnChannelMutated) http.Handler {
 	userSvc := service.NewUserService(db, cfg)
 	authHandler := handler.NewAuthHandler(userSvc, db, cfg)
 	userHandler := handler.NewUserHandler(userSvc)

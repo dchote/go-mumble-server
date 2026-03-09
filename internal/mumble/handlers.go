@@ -18,6 +18,7 @@ import (
 	"github.com/dchote/go-mumble-server/internal/user"
 	"github.com/dchote/go-mumble-server/pkg/mumble"
 	mumbleaudio "github.com/dchote/go-mumble-server/pkg/mumble/audio"
+	"github.com/dchote/go-mumble-server/pkg/mumble/crypto"
 	"github.com/dchote/go-mumble-server/pkg/mumble/protocol"
 	"github.com/dchote/go-mumble-server/pkg/mumble/protocol/messages"
 	"gorm.io/gorm"
@@ -47,13 +48,14 @@ type textRateState struct {
 	windowAt time.Time
 }
 
-// HandleUDP processes an incoming UDP voice packet.
+// HandleUDP processes an incoming UDP voice or ping packet.
 func (s *Server) HandleUDP(addr net.Addr, data []byte) {
-	if s.udpConn == nil || s.router == nil {
+	if s.udpConn == nil {
 		return
 	}
 	plain := make([]byte, len(data)+256)
 	var senderSession uint32
+	var senderCrypt *crypto.CryptState
 	s.connMu.RLock()
 	for sid, c := range s.conns {
 		if c.Crypt == nil || c.State() != connection.StateActive {
@@ -62,6 +64,7 @@ func (s *Server) HandleUDP(addr net.Addr, data []byte) {
 		err := c.Crypt.Decrypt(plain, data)
 		if err == nil {
 			senderSession = sid
+			senderCrypt = c.Crypt
 			plain = plain[:len(data)-c.Crypt.Overhead()]
 			break
 		}
@@ -71,31 +74,72 @@ func (s *Server) HandleUDP(addr net.Addr, data []byte) {
 		return
 	}
 	s.addrBySession.Store(senderSession, addr)
-	p, err := mumbleaudio.ParsePacket(plain)
-	if err != nil {
+
+	if len(plain) < 1 {
 		return
 	}
-	_ = s.router.Route(senderSession, p.Target, plain)
+
+	// Check packet type from header byte (bits 7-5)
+	codecType := (plain[0] >> 5) & 0x7
+
+	// Type 1 = UDP ping: echo back to sender for connectivity confirmation
+	if codecType == 1 {
+		enc := make([]byte, len(plain)+senderCrypt.Overhead())
+		if err := senderCrypt.Encrypt(enc, plain); err == nil {
+			s.udpConn.WriteTo(enc, addr)
+		}
+		return
+	}
+
+	if s.router == nil {
+		return
+	}
+	target := plain[0] & 0x1F
+	outgoing := rewriteAudioPacket(senderSession, plain)
+	_ = s.router.Route(senderSession, target, outgoing)
 }
 
-// SendAudio implements audio.RecipientSender. Encrypts with recipient's key and sends via UDP.
+// rewriteAudioPacket converts a client-to-server audio packet into a
+// server-to-client packet by inserting the sender's session ID varint
+// between the header byte and the rest of the payload.
+// Client→server: [header] [sequence] [payload_len] [data...]
+// Server→client: [header] [session]  [sequence]    [payload_len] [data...]
+func rewriteAudioPacket(senderSession uint32, clientPacket []byte) []byte {
+	if len(clientPacket) < 1 {
+		return clientPacket
+	}
+	var sessionBuf [mumbleaudio.MaxVarintLen]byte
+	n := mumbleaudio.EncodeVarint(sessionBuf[:], int64(senderSession))
+	out := make([]byte, 1+n+len(clientPacket)-1)
+	out[0] = clientPacket[0]
+	copy(out[1:], sessionBuf[:n])
+	copy(out[1+n:], clientPacket[1:])
+	return out
+}
+
+// SendAudio implements audio.RecipientSender. Encrypts with recipient's key and sends via UDP, or TCP fallback.
 func (s *Server) SendAudio(sessionID uint32, packet []byte) error {
 	s.connMu.RLock()
 	c, ok := s.conns[sessionID]
 	recipientAddr, _ := s.addrBySession.Load(sessionID)
 	s.connMu.RUnlock()
-	if !ok || c == nil || c.Crypt == nil || recipientAddr == nil || s.udpConn == nil {
+	if !ok || c == nil {
 		return nil
 	}
-	addr := recipientAddr.(net.Addr)
-	plain := packet
-	overhead := c.Crypt.Overhead()
-	enc := make([]byte, len(plain)+overhead)
-	if err := c.Crypt.Encrypt(enc, plain); err != nil {
-		return err
+
+	// Try UDP first if recipient has a known UDP address
+	if recipientAddr != nil && c.Crypt != nil && s.udpConn != nil {
+		addr := recipientAddr.(net.Addr)
+		overhead := c.Crypt.Overhead()
+		enc := make([]byte, len(packet)+overhead)
+		if err := c.Crypt.Encrypt(enc, packet); err == nil {
+			_, err := s.udpConn.WriteTo(enc, addr)
+			return err
+		}
 	}
-	_, err := s.udpConn.WriteTo(enc, addr)
-	return err
+
+	// TCP fallback: wrap as UDPTunnel message
+	return c.WriteRaw(protocol.MessageUDPTunnel, packet)
 }
 
 func (s *Server) canSenderSpeak(sessionID uint32) bool {
@@ -290,12 +334,24 @@ func (s *Server) handleAuthenticate(msgType protocol.MessageType, payload []byte
 	if s.users.Count() >= s.cfg.MaxUsers && s.cfg.MaxUsers > 0 {
 		return s.sendReject(c, messages.RejectServerFull, "Server full")
 	}
+	var apiUserID uint
 	if s.cfg.ServerPassword != "" {
+		// Server password set: accept server password OR API user password
 		if authMsg.Password != s.cfg.ServerPassword {
-			_, hash, found := s.users.RegisterDBUser(authMsg.Username)
+			id, hash, _, found := s.users.LookupAPIUser(authMsg.Username)
 			if !found || !auth.ComparePassword(hash, authMsg.Password) {
 				return s.sendReject(c, messages.RejectWrongServerPW, "Wrong password")
 			}
+			apiUserID = uint(id)
+		}
+	} else if authMsg.Password != "" {
+		// No server password: if client sent password, validate against API users
+		id, hash, _, found := s.users.LookupAPIUser(authMsg.Username)
+		if found {
+			if !auth.ComparePassword(hash, authMsg.Password) {
+				return s.sendReject(c, messages.RejectWrongServerPW, "Wrong password")
+			}
+			apiUserID = uint(id)
 		}
 	}
 	defaultChan := uint32(s.chans.RootID())
@@ -303,7 +359,9 @@ func (s *Server) handleAuthenticate(msgType protocol.MessageType, payload []byte
 		defaultChan = uint32(s.cfg.DefaultChannel)
 	}
 	userID := uint32(0)
-	if uid, _, found := s.lookupRegisteredUser(authMsg.Username); found {
+	if apiUserID != 0 {
+		userID = acl.MakeAPIUserID(apiUserID)
+	} else if uid, _, found := s.lookupRegisteredUser(authMsg.Username); found {
 		userID = uid
 	}
 	u := &mumble.User{
@@ -349,8 +407,8 @@ func (s *Server) sendSync(c *connection.Conn, u *mumble.User) {
 	c.Crypt.SetKey(key, encNonce, decNonce)
 	_ = c.WriteMessage(protocol.MessageCryptSetup, &messages.CryptSetup{
 		Key:         key,
-		ClientNonce: encNonce,
-		ServerNonce: decNonce,
+		ClientNonce: decNonce, // server's decrypt nonce = client's encrypt nonce
+		ServerNonce: encNonce, // server's encrypt nonce = client's decrypt nonce
 	})
 	_ = c.WriteMessage(protocol.MessageCodecVersion, &messages.CodecVersion{Opus: true})
 	for _, ch := range s.chans.GetTree() {
@@ -919,7 +977,8 @@ func (s *Server) handleUDPTunnel(msgType protocol.MessageType, payload []byte, c
 	}
 	target := uint8(payload[0] & 0x1F)
 	sid := c.SessionID()
-	_ = s.router.Route(sid, target, payload)
+	outgoing := rewriteAudioPacket(sid, payload)
+	_ = s.router.Route(sid, target, outgoing)
 	return nil
 }
 

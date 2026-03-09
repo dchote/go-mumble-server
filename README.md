@@ -170,7 +170,7 @@ curl http://localhost:9090/api/v1/servers
 # Channel tree
 curl http://localhost:9090/api/v1/servers/1/channels
 
-# Connected users
+# Connected users (includes session_id, user_id, name, channel_id, mute state, is_admin)
 curl http://localhost:9090/api/v1/servers/1/users
 
 # Server configuration
@@ -356,7 +356,6 @@ go build -o test-client ./cmd/test-client
 go-mumble-server is compatible with any client implementing the standard Mumble protocol:
 
 - [Mumble](https://www.mumble.info/) (Desktop — Windows, macOS, Linux)
-- [Plumble](https://play.google.com/store/apps/details?id=com.morlunk.mumbleclient) (Android)
 - [Mumla](https://f-droid.org/packages/se.lublin.mumla/) (Android, F-Droid)
 - Custom Go clients built on `pkg/mumble/`
 

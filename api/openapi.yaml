@@ -5,6 +5,41 @@ info:
   description: Management API for the Mumble voice chat server
 
 components:
+  schemas:
+    ConnectedUser:
+      type: object
+      description: A connected Mumble user (for channel tree display)
+      properties:
+        session_id:
+          type: integer
+          format: uint32
+          description: Mumble session ID
+        user_id:
+          type: integer
+          format: uint32
+          description: Mumble user ID (0 = SuperUser; 0x80000000+ = API user)
+        name:
+          type: string
+          description: Display name
+        channel_id:
+          type: integer
+          format: uint32
+          description: Channel the user is in
+        self_mute:
+          type: boolean
+          description: User has muted themselves
+        self_deaf:
+          type: boolean
+          description: User has deafened themselves
+        mute:
+          type: boolean
+          description: Server has muted the user
+        deaf:
+          type: boolean
+          description: Server has deafened the user
+        is_admin:
+          type: boolean
+          description: User has admin privileges (SuperUser, API role=admin, or in @admin group)
   securitySchemes:
     bearerAuth:
       type: http
@@ -251,6 +286,7 @@ paths:
   /api/v1/servers/{id}/users:
     get:
       summary: List connected users
+      description: Returns Mumble clients connected to this virtual server, with is_admin for RBAC display
       operationId: listUsers
       security:
         - bearerAuth: []
@@ -263,6 +299,12 @@ paths:
       responses:
         '200':
           description: List of connected users
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ConnectedUser'
   /api/v1/servers/{id}/channels:
     get:
       summary: Get channel tree

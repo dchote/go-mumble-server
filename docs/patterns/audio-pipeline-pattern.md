@@ -4,7 +4,7 @@
 
 ## Overview
 
-The audio pipeline is the performance-critical path in a Mumble server. Audio packets arrive via UDP (or TCP tunnel), are decrypted, routed to recipients based on voice targets and channel topology, and forwarded without re-encoding. The server never decodes audio — it operates on opaque codec frames.
+The audio pipeline is the performance-critical path in a Mumble server. Audio packets arrive via UDP (or TCP tunnel), are decrypted, routed to recipients based on voice targets and channel topology, and forwarded without re-encoding. The server never decodes audio — it operates on opaque codec frames. Two protocol requirements are critical: (1) the server must echo UDP pings so clients can establish UDP connectivity; (2) the server must insert the sender's session ID into packets before forwarding, since client→server packets omit it but server→client packets require it.
 
 ## Audio Packet Flow
 
@@ -21,7 +21,21 @@ The audio pipeline is the performance-critical path in a Mumble server. Audio pa
        │
        ▼
 ┌──────────────┐
-│  Parse Header│  Extract: codec, target, session, sequence
+│ Packet Type? │  Codec type from header (bits 7-5)
+└──────┬───────┘
+       │
+       ├── Codec 1 (Ping) ──► Echo back to sender (UDP only)
+       │                      (confirms UDP connectivity)
+       │
+       ▼
+┌──────────────┐
+│  Parse Header│  Extract: codec, target (session from TCP/decrypt)
+└──────┬───────┘
+       │
+       ▼
+┌──────────────┐
+│ Rewrite Pkt  │  Insert sender session ID (client→server has none;
+│              │  server→client must include it)
 └──────┬───────┘
        │
        ▼
@@ -32,8 +46,8 @@ The audio pipeline is the performance-critical path in a Mumble server. Audio pa
        │
        ▼ (for each recipient)
 ┌──────────────┐
-│   Forward    │  Re-encrypt for recipient (UDP)
-│              │  or wrap in UDPTunnel (TCP)
+│   Forward    │  Re-encrypt for recipient (UDP if addr known)
+│              │  else wrap in UDPTunnel (TCP fallback)
 └──────────────┘
        │
        ▼
@@ -58,6 +72,7 @@ Optional:     3× float32 positional audio (X, Y, Z)
 
 Codec IDs:
 - `0` — CELT Alpha
+- `1` — Ping (UDP connectivity test; server echoes back)
 - `2` — Speex (deprecated)
 - `3` — CELT Beta
 - `4` — Opus (preferred)

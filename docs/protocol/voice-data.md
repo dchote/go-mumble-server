@@ -14,6 +14,7 @@ Voice data travels over UDP (encrypted with an AEAD cipher) or is tunneled over 
 - Encrypted with AEAD cipher — OCB2-AES128 (legacy mode) or AES-256-GCM (secure mode). Each client has a unique key and nonce pair.
 - Maximum packet size: 1024 bytes.
 - Preferred transport for low latency.
+- **UDP ping (codec type 1):** Clients send encrypted pings to test connectivity; the server echoes them back. Without this echo, clients assume UDP is unavailable and fall back to TCP tunneling.
 - Encryption overhead: 4 bytes (legacy) or 28 bytes (secure). See [encryption.md](encryption.md).
 
 ### TCP Tunnel (UDPTunnel)
@@ -22,6 +23,7 @@ Voice data travels over UDP (encrypted with an AEAD cipher) or is tunneled over 
 - Message type 1 in the TCP framing — the payload is the raw (decrypted) audio packet.
 - Higher latency due to TCP head-of-line blocking.
 - Clients auto-detect UDP availability and fall back to TCP.
+- The server forwards voice to recipients via either UDP or TCP tunnel, depending on whether the recipient has established UDP connectivity (has sent at least one UDP packet).
 
 ## Legacy Binary Format
 
@@ -62,6 +64,7 @@ Used in all Mumble versions. Still the format inside `UDPTunnel` for legacy clie
 | ID | Codec | Notes |
 |----|-------|-------|
 | 0 | CELT Alpha | Legacy, version-specific |
+| 1 | Ping | UDP connectivity test; server echoes back |
 | 2 | Speex | Deprecated |
 | 3 | CELT Beta | Legacy, version-specific |
 | 4 | Opus | Preferred, required for modern clients |

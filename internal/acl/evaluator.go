@@ -239,6 +239,9 @@ func (e *Evaluator) userInGroup(userID uint32, groupName string, resolveChannelI
 		if userID == 0 {
 			return true // SuperUser is always in admin
 		}
+		if IsAPIUserID(userID) {
+			return ResolveAPIAdmin(e.db, userID) // RBAC: API users with role=admin
+		}
 		return e.userInStoredGroup(userID, "admin", resolveChannelID)
 	case "sub":
 		return e.userInSubChannel(userID, resolveChannelID, userChannelID)

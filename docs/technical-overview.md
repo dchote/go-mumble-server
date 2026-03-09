@@ -114,7 +114,7 @@ go-mumble-server binds three network interfaces:
 
 1. **Mumble TCP/TLS** (default `:64738`) — Control channel for Mumble protocol messages (native Go encoding). Handles connection setup, authentication, channel/user state synchronization, text messaging, and ACL management.
 
-2. **Mumble UDP** (default `:64738`) — Voice data channel. AEAD-encrypted audio packets (OCB2-AES128 in legacy mode, AES-256-GCM in secure mode). Same port as TCP per Mumble protocol convention.
+2. **Mumble UDP** (default `:64738`) — Voice data channel. AEAD-encrypted audio packets (OCB2-AES128 in legacy mode, AES-256-GCM in secure mode). Same port as TCP per Mumble protocol convention. The server echoes UDP pings so clients can confirm connectivity before using UDP for voice.
 
 3. **REST API + Web UI** (default `:9090`) — HTTP management interface with Swagger docs at `/docs` and an embedded Vue 3 + Vuetify management frontend. Used for administration, monitoring, and integration.
 
@@ -213,7 +213,7 @@ A client connection follows this sequence:
 5. **Authentication** — Client sends `Authenticate` with username, password, tokens, and codec list.
 6. **State sync** — Server sends full channel tree (`ChannelState`), all connected users (`UserState`), and server configuration (`ServerConfig`).
 7. **Server sync** — Server sends `ServerSync` with the client's session ID, welcome text, and permissions. Client is now fully connected.
-8. **Steady state** — Bidirectional protocol messages on TCP; voice on UDP (or tunneled via `UDPTunnel` on TCP).
+8. **Steady state** — Bidirectional protocol messages on TCP; voice on UDP (after clients receive ping echo) or tunneled via `UDPTunnel` on TCP when UDP is unavailable.
 9. **Disconnect** — TCP close or timeout. Server broadcasts `UserRemove`.
 
 See [patterns/connection-lifecycle-pattern.md](patterns/connection-lifecycle-pattern.md).
@@ -230,9 +230,11 @@ See [protocol/control-messages.md](protocol/control-messages.md) for the full me
 
 The audio subsystem handles:
 
+- **UDP ping echo** — Clients send encrypted UDP pings (codec type 1) to test connectivity. The server echoes them back; without this, clients assume UDP is blocked and fall back to TCP tunneling.
 - **Decryption** — AEAD decryption of incoming UDP packets using per-client `CryptState` (OCB2-AES128 in legacy mode, AES-256-GCM in secure mode).
+- **Packet rewriting** — Client→server packets omit the sender's session ID; server→client packets must include it. The server inserts the sender session ID (varint) between the header and the rest of the payload before forwarding.
 - **Routing** — Determines recipients based on voice target (normal talk, whisper, server loopback).
-- **Forwarding** — Sends audio to recipients via UDP (preferred) or TCP tunnel (fallback).
+- **Forwarding** — Sends audio to recipients via UDP (if the recipient has sent at least one UDP packet) or TCP tunnel (fallback via `UDPTunnel` message).
 
 Audio is **not decoded on the server** — packets are forwarded as opaque Opus/CELT frames. The server only inspects the header to determine routing.
 
@@ -265,7 +267,7 @@ Access control uses a layered model, implemented in `internal/acl/evaluator.go`:
 5. **Caching** — Permissions cached per (user, channel); invalidated on ACL change (REST PUT) and user channel move.
 6. **Default ACLs** — Root channel seeded with `all`, `auth`, `admin` rules via `EnsureDefaultRootACLs()`.
 
-SuperUser (user ID 0) always has Write. UserID is resolved from `registered_users` at authenticate.
+SuperUser (user ID 0) always has Write. UserID is resolved from `registered_users` or API users at authenticate. API users (from the management `users` table) receive synthetic userIDs and RBAC roles are resolved for `@admin` membership. See [RBAC Strategy](patterns/acl-evaluation-pattern.md#rbac-strategy-api-users).
 
 Permissions are evaluated as a bitmask. See [patterns/acl-evaluation-pattern.md](patterns/acl-evaluation-pattern.md) and [protocol/permissions.md](protocol/permissions.md).
 
@@ -313,7 +315,7 @@ The REST management API runs on a separate HTTP server (default port `9090`):
 | `/api/v1/servers/:id/channels` | GET, POST | Channel tree + create |
 | `/api/v1/servers/:id/channels/:channelId` | PATCH, DELETE | Update/delete channel |
 | `/api/v1/servers/:id/channels/:channelId/acl` | GET, PUT | Channel ACLs and groups |
-| `/api/v1/servers/:id/users` | GET | Connected Mumble users |
+| `/api/v1/servers/:id/users` | GET | Connected Mumble users (includes `is_admin` for RBAC) |
 | `/api/v1/servers/:id/registered-users` | GET, POST | Registered user CRUD |
 | `/api/v1/servers/:id/registered-users/:userId` | PATCH, DELETE | Single registered user |
 | `/api/v1/servers/:id/bans` | GET, POST | Ban list CRUD |

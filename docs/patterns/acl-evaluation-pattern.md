@@ -25,10 +25,10 @@ A group is a named set of users defined on a channel. Groups support inheritance
 | Group | Members |
 |-------|---------|
 | `all` | Every connected user |
-| `auth` | Users with a registered account (user ID ≥ 0) |
+| `auth` | Users with a registered account (user ID > 0) |
 | `in` | Users currently in this channel |
 | `out` | Users not currently in this channel |
-| `admin` | Members of the `admin` group |
+| `admin` | SuperUser (0), members of the stored `admin` group, or API users with `role=admin` (RBAC) |
 | `sub` | Users in sub-channels (with optional path/depth constraints) |
 | `~channel` | Evaluated in the context of the channel being ACL-checked (not the user's current channel) |
 
@@ -159,6 +159,24 @@ The root channel (ID 0) has a default ACL:
 | `all` | Grant: `Traverse`, `Enter` |
 
 SuperUser (user ID 0) is always in the `admin` group and always has `Write` permission.
+
+## RBAC Strategy (API Users)
+
+Management API users (`users` table) can authenticate to Mumble with their web credentials. For RBAC compliance, they receive synthetic Mumble userIDs in a reserved range so the evaluator can resolve roles:
+
+| User Type | userID | @admin | @auth |
+|-----------|--------|--------|-------|
+| SuperUser (unauthenticated / server password) | 0 | ✓ | ✗ |
+| Registered user (per-server) | 1, 2, 3… | If in stored admin group | ✓ |
+| API admin (role=admin) | 0x80000000 \| users.id | ✓ | ✓ |
+| API user (role=user) | 0x80000000 \| users.id | ✗ | ✓ |
+
+- **Constants**: `APIUserIDBase = 0x80000000`, `APIUserIDMask = 0x7FFFFFFF`
+- **Resolution**: When evaluating `@admin`, if `userID >= APIUserIDBase`, the evaluator queries `users` for that id and returns true if `role = 'admin'`
+- **Implementation**: `internal/acl/rbac_strategy.go` — `MakeAPIUserID`, `IsAPIUserID`, `ResolveAPIAdmin`
+- **Auth**: `handleAuthenticate` assigns synthetic userIDs to API users; `LookupAPIUser` returns id and role
+- **Display**: REST `GET /api/v1/servers/:id/users` returns `is_admin` per connected user for channel tree UI
+- **Note**: API users must have `role=admin` in the `users` table for `is_admin` to be true. Use the admin users page (`/admin/users`) to set or update roles.
 
 ## Implementation
 

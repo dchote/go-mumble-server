@@ -26,7 +26,7 @@ frontend/src/
 ### List → Detail Pattern
 
 - **Virtual servers**: List (not cards). Click list item → server detail page. Edit button right-aligned in detail header.
-- **Channels**: List/table on server detail. Click channel → channel detail page. "Add Channel" button right-aligned in Channels section header.
+- **Channels**: List/table on server detail. Click channel → channel detail page. "Add Channel" button right-aligned in Channels section header. Connected users in the channel tree show an "Admin" chip when `is_admin` is true (API users need `role=admin` in the users table).
 - **Bans, Registered users**: Lists under section headers. "Add ban" / "Register user" right-aligned in each section header.
 
 ### Header Rules

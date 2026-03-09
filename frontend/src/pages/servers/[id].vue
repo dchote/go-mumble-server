@@ -7,10 +7,7 @@
         <v-spacer />
         <v-menu location="bottom end">
           <template #activator="{ props: menuProps }">
-            <v-btn v-bind="menuProps" variant="elevated" color="primary" size="small">
-              Edit
-              <v-icon end size="small">mdi-chevron-down</v-icon>
-            </v-btn>
+            <v-btn v-bind="menuProps" icon="mdi-dots-vertical" variant="text" size="small" />
           </template>
           <v-list density="compact">
             <v-list-item prepend-icon="mdi-pencil" title="Edit server" @click="openEdit" />
@@ -46,6 +43,7 @@
         v-else
         :channels="channelTree"
         :server-id="serverId"
+        :users="users"
         @create-sub="openCreateChannel"
         @edit="openEditChannel"
         @acl="openACL"
@@ -53,15 +51,6 @@
       />
 
       <div class="section-header d-flex align-center mt-6 mb-2">
-        <h3 class="text-subtitle-1 font-weight-bold mb-0">Connected Users</h3>
-      </div>
-      <v-progress-linear v-if="usersLoading" indeterminate class="mb-2" />
-      <p v-else-if="users.length === 0" class="text-body-2 mb-4">No users connected.</p>
-      <v-list v-else density="compact" class="mb-4">
-        <v-list-item v-for="u in users" :key="u.session_id || u.id" :title="u.name || u.username || 'Unknown'" />
-      </v-list>
-
-      <div class="section-header d-flex align-center mb-2">
         <h3 class="text-subtitle-1 font-weight-bold mb-0">Bans</h3>
         <v-spacer />
         <v-btn size="small" variant="outlined" @click="showAddBan = true">Add ban</v-btn>

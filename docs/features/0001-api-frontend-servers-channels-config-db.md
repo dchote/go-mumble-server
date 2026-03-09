@@ -37,11 +37,16 @@
 - ACLDialog (editable) in channel context menu — add/remove groups and ACL rules, permission checkboxes
 - Full ACL evaluator: `internal/acl/evaluator.go` — DB-backed, in-memory cache, meta groups (@all, @in, @out, @sub, @auth, @admin), token groups, eval-locality (~), inversion (!)
 - Default root ACLs seeded on server/channel creation: `all` (Traverse, Enter), `auth` (Speak, TextMessage, MakeTempChannel, SelfRegister), `admin` (Write)
-- SuperUser (user ID 0) always has Write; UserID from registered_users, access tokens from Authenticate
+- SuperUser (user ID 0) always has Write; UserID from registered_users or API users; API users get synthetic userIDs and RBAC roles for @admin
 
 ### Phase 5: Bans
 - REST: GET/POST/DELETE /api/v1/servers/{id}/bans, bans/{banId}
 - Bans section on server detail with Add ban dialog
+
+### Phase 6a: API user Mumble auth (RBAC)
+- Management API users can authenticate to Mumble with their web credentials (even when no server password)
+- API admins (role=admin) receive @admin privileges on all virtual servers
+- Connected users REST response includes `is_admin` for channel tree display
 
 ### Phase 6: Registered Mumble users
 - DB model: `registered_users`

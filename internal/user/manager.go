@@ -133,15 +133,23 @@ func (m *Manager) SetChannel(sessionID uint32, channelID uint32) {
 
 // RegisterDBUser looks up a management/registered user by username.
 func (m *Manager) RegisterDBUser(username string) (userID uint32, passwordHash string, found bool) {
+	id, hash, _, found := m.LookupAPIUser(username)
+	return id, hash, found
+}
+
+// LookupAPIUser looks up an API user by username, returning id, password hash, role, and found.
+// Used for RBAC-aware Mumble auth: id is users.id, role is needed for ACL resolution.
+func (m *Manager) LookupAPIUser(username string) (id uint32, passwordHash string, role string, found bool) {
 	var u struct {
 		ID           uint
 		PasswordHash string
+		Role         string
 	}
-	err := m.db.Table("users").Where("username = ?", username).Select("id", "password_hash").First(&u).Error
+	err := m.db.Table("users").Where("username = ?", username).Select("id", "password_hash", "role").First(&u).Error
 	if err != nil {
-		return 0, "", false
+		return 0, "", "", false
 	}
-	return uint32(u.ID), u.PasswordHash, true
+	return uint32(u.ID), u.PasswordHash, u.Role, true
 }
 
 // sessionPool allocates session IDs.

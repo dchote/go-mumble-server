@@ -20,11 +20,16 @@ import (
 // ch is the channel for create/update; for delete, ch is nil and channelID is the removed ID.
 type OnChannelMutated func(serverID uint, ch interface{}, channelID uint32, removed bool)
 
+// ConnectedUserLister lists connected Mumble users; used by GetUsers.
+type ConnectedUserLister interface {
+	ListConnected(serverID uint, db *gorm.DB) interface{}
+}
+
 // ServerHandler handles server and channel REST endpoints.
 type ServerHandler struct {
 	db                *gorm.DB
 	cfg               *config.Config
-	connectedUsers     interface{ ListConnected() interface{} }
+	connectedUsers     ConnectedUserLister
 	getChanMgr        func(serverID uint) *channel.Manager
 	onChannelMutated  OnChannelMutated
 	metaHost          string
@@ -32,7 +37,7 @@ type ServerHandler struct {
 }
 
 // NewServerHandler creates a ServerHandler.
-func NewServerHandler(db *gorm.DB, cfg *config.Config, connectedUsers interface{ ListConnected() interface{} }, getChanMgr func(serverID uint) *channel.Manager, onChannelMutated OnChannelMutated) *ServerHandler {
+func NewServerHandler(db *gorm.DB, cfg *config.Config, connectedUsers ConnectedUserLister, getChanMgr func(serverID uint) *channel.Manager, onChannelMutated OnChannelMutated) *ServerHandler {
 	meta, _ := config.LoadMetaConfig(db)
 	host, port := "0.0.0.0", 64738
 	if meta != nil {
@@ -574,7 +579,9 @@ func ptr(u uint) *uint { return &u }
 func (h *ServerHandler) GetUsers(w http.ResponseWriter, r *http.Request) {
 	var users interface{} = []struct{}{}
 	if h.connectedUsers != nil {
-		users = h.connectedUsers.ListConnected()
+		idStr := chi.URLParam(r, "id")
+		serverID, _ := strconv.ParseUint(idStr, 10, 32)
+		users = h.connectedUsers.ListConnected(uint(serverID), h.db)
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(users)
