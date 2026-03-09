@@ -25,6 +25,16 @@ components:
           type: integer
           format: uint32
           description: Channel the user is in
+        address:
+          type: string
+          description: Client IP address (host, no port)
+        ping:
+          type: number
+          format: float
+          description: Client-reported TCP ping in milliseconds (from last Ping message)
+        certificate_hash:
+          type: string
+          description: SHA-1 hex fingerprint of the client's TLS certificate (lowercase); empty if client did not present a certificate. Use for banning by certificate.
         self_mute:
           type: boolean
           description: User has muted themselves
@@ -305,6 +315,94 @@ paths:
                 type: array
                 items:
                   $ref: '#/components/schemas/ConnectedUser'
+  /api/v1/servers/{id}/users/{sessionId}/kick:
+    post:
+      summary: Kick connected user
+      operationId: kickUser
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+        - name: sessionId
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                reason: { type: string }
+      responses:
+        '204':
+          description: Kicked
+        '404':
+          description: User not found
+  /api/v1/servers/{id}/users/{sessionId}/mute:
+    post:
+      summary: Mute or unmute connected user
+      operationId: muteUser
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+        - name: sessionId
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [mute]
+              properties:
+                mute: { type: boolean }
+      responses:
+        '204':
+          description: Updated
+        '404':
+          description: User not found
+  /api/v1/servers/{id}/users/{sessionId}/ban:
+    post:
+      summary: Ban and kick connected user
+      operationId: banUser
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+        - name: sessionId
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                reason: { type: string }
+      responses:
+        '204':
+          description: Banned and kicked
+        '404':
+          description: User not found
   /api/v1/servers/{id}/channels:
     get:
       summary: Get channel tree

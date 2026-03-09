@@ -2,7 +2,7 @@
   <v-container>
     <v-row justify="center">
       <v-col cols="12" sm="8" md="6">
-        <BrandCard title="Sign up" content-class="pa-3 pa-sm-6">
+        <StandardCard title="Sign up">
           <v-form @submit.prevent="handleRegister">
               <v-alert v-if="error" type="error" density="compact" class="mb-4">
                 {{ error }}
@@ -37,7 +37,7 @@
             Already have an account?
             <router-link to="/login" class="text-primary text-decoration-none font-weight-medium">Login</router-link>
           </p>
-        </BrandCard>
+        </StandardCard>
       </v-col>
     </v-row>
   </v-container>
@@ -47,7 +47,7 @@
 import { ref } from 'vue'
 import { useStore } from 'vuex'
 import { useRouter } from 'vue-router'
-import BrandCard from '@/components/common/BrandCard.vue'
+import StandardCard from '@/components/common/StandardCard.vue'
 
 const store = useStore()
 const router = useRouter()

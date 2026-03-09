@@ -29,6 +29,10 @@ async function request(path, options = {}) {
     throw new Error(err.error || `Request failed: ${res.status}`)
   }
 
+  if (res.status === 204) {
+    return null
+  }
+
   const contentType = res.headers.get('content-type')
   if (contentType && contentType.includes('application/json')) {
     return res.json()

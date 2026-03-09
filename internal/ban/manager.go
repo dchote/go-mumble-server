@@ -38,12 +38,21 @@ func NewManager(db *gorm.DB, serverID uint) *Manager {
 }
 
 func (m *Manager) load() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.loadLocked()
+}
+
+// Reload re-reads bans from the database. Call when bans are modified via REST or another process.
+func (m *Manager) Reload() {
+	m.load()
+}
+
+func (m *Manager) loadLocked() {
 	var rows []models.Ban
 	if err := m.db.Where("server_id = ?", m.serverID).Find(&rows).Error; err != nil {
 		return
 	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
 	m.bans = make([]banEntry, 0, len(rows))
 	for _, b := range rows {
 		m.bans = append(m.bans, banEntry{
@@ -136,7 +145,7 @@ func (m *Manager) Replace(bans []messages.BanEntry) error {
 			return err
 		}
 	}
-	m.load()
+	m.loadLocked()
 	return nil
 }
 

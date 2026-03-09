@@ -25,25 +25,33 @@ type ConnectedUserLister interface {
 	ListConnected(serverID uint, db *gorm.DB) interface{}
 }
 
+// ConnectedUserActioner performs kick, mute, ban on connected users (REST-initiated).
+type ConnectedUserActioner interface {
+	Kick(serverID uint, sessionID uint32, reason string) (ok bool)
+	Mute(serverID uint, sessionID uint32, mute bool) (ok bool)
+	BanAndKick(serverID uint, sessionID uint32, reason string) (ok bool)
+}
+
 // ServerHandler handles server and channel REST endpoints.
 type ServerHandler struct {
-	db                *gorm.DB
-	cfg               *config.Config
-	connectedUsers     ConnectedUserLister
-	getChanMgr        func(serverID uint) *channel.Manager
-	onChannelMutated  OnChannelMutated
-	metaHost          string
-	metaMumblePort    int
+	db                  *gorm.DB
+	cfg                 *config.Config
+	connectedUsers      ConnectedUserLister
+	userActioner        ConnectedUserActioner
+	getChanMgr          func(serverID uint) *channel.Manager
+	onChannelMutated    OnChannelMutated
+	metaHost            string
+	metaMumblePort      int
 }
 
 // NewServerHandler creates a ServerHandler.
-func NewServerHandler(db *gorm.DB, cfg *config.Config, connectedUsers ConnectedUserLister, getChanMgr func(serverID uint) *channel.Manager, onChannelMutated OnChannelMutated) *ServerHandler {
+func NewServerHandler(db *gorm.DB, cfg *config.Config, connectedUsers ConnectedUserLister, userActioner ConnectedUserActioner, getChanMgr func(serverID uint) *channel.Manager, onChannelMutated OnChannelMutated) *ServerHandler {
 	meta, _ := config.LoadMetaConfig(db)
 	host, port := "0.0.0.0", 64738
 	if meta != nil {
 		host, port = meta.Host, meta.MumblePort
 	}
-	return &ServerHandler{db: db, cfg: cfg, connectedUsers: connectedUsers, getChanMgr: getChanMgr, onChannelMutated: onChannelMutated, metaHost: host, metaMumblePort: port}
+	return &ServerHandler{db: db, cfg: cfg, connectedUsers: connectedUsers, userActioner: userActioner, getChanMgr: getChanMgr, onChannelMutated: onChannelMutated, metaHost: host, metaMumblePort: port}
 }
 
 // List returns all virtual servers. Seeds a default server if none exist.
@@ -289,7 +297,7 @@ func (h *ServerHandler) GetMetaConfig(w http.ResponseWriter, r *http.Request) {
 			SecurityMode:  "legacy",
 			Host:          "0.0.0.0",
 			MumblePort:    64738,
-			RESTPort:      9090,
+			RESTPort:      64730,
 			JWTIssuer:     "go-mumble-server",
 			JWTAudience:   "go-mumble-server-api",
 			JWTExpiryDays: 30,
@@ -321,7 +329,7 @@ func (h *ServerHandler) UpdateMetaConfig(w http.ResponseWriter, r *http.Request)
 	if err != nil || meta == nil {
 		meta = &config.MetaConfig{
 			SecurityMode: "legacy", Host: "0.0.0.0",
-			MumblePort: 64738, RESTPort: 9090,
+			MumblePort: 64738, RESTPort: 64730,
 			JWTIssuer: "go-mumble-server", JWTAudience: "go-mumble-server-api", JWTExpiryDays: 30,
 		}
 	}
@@ -587,13 +595,91 @@ func (h *ServerHandler) GetUsers(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(users)
 }
 
+// KickUser kicks a connected user.
+func (h *ServerHandler) KickUser(w http.ResponseWriter, r *http.Request) {
+	h.doUserAction(w, r, "kick", func(actioner ConnectedUserActioner, serverID uint, sessionID uint32, reason string) bool {
+		return actioner.Kick(serverID, sessionID, reason)
+	})
+}
+
+// MuteUser mutes or unmutes a connected user.
+func (h *ServerHandler) MuteUser(w http.ResponseWriter, r *http.Request) {
+	if h.userActioner == nil {
+		http.Error(w, `{"error":"user actions not available"}`, http.StatusNotImplemented)
+		return
+	}
+	serverIDStr := chi.URLParam(r, "id")
+	sessionIDStr := chi.URLParam(r, "sessionId")
+	serverID, err := strconv.ParseUint(serverIDStr, 10, 32)
+	if err != nil {
+		http.Error(w, `{"error":"invalid server id"}`, http.StatusBadRequest)
+		return
+	}
+	sessionID, err := strconv.ParseUint(sessionIDStr, 10, 32)
+	if err != nil {
+		http.Error(w, `{"error":"invalid session id"}`, http.StatusBadRequest)
+		return
+	}
+	var body struct {
+		Mute bool `json:"mute"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, `{"error":"invalid request body"}`, http.StatusBadRequest)
+		return
+	}
+	if !h.userActioner.Mute(uint(serverID), uint32(sessionID), body.Mute) {
+		http.Error(w, `{"error":"user not found"}`, http.StatusNotFound)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// BanUser bans and kicks a connected user.
+func (h *ServerHandler) BanUser(w http.ResponseWriter, r *http.Request) {
+	h.doUserAction(w, r, "ban", func(actioner ConnectedUserActioner, serverID uint, sessionID uint32, reason string) bool {
+		return actioner.BanAndKick(serverID, sessionID, reason)
+	})
+}
+
+func (h *ServerHandler) doUserAction(w http.ResponseWriter, r *http.Request, action string, fn func(ConnectedUserActioner, uint, uint32, string) bool) {
+	if h.userActioner == nil {
+		http.Error(w, `{"error":"user actions not available"}`, http.StatusNotImplemented)
+		return
+	}
+	serverIDStr := chi.URLParam(r, "id")
+	sessionIDStr := chi.URLParam(r, "sessionId")
+	serverID, err := strconv.ParseUint(serverIDStr, 10, 32)
+	if err != nil {
+		http.Error(w, `{"error":"invalid server id"}`, http.StatusBadRequest)
+		return
+	}
+	sessionID, err := strconv.ParseUint(sessionIDStr, 10, 32)
+	if err != nil {
+		http.Error(w, `{"error":"invalid session id"}`, http.StatusBadRequest)
+		return
+	}
+	reason := ""
+	if r.Body != nil {
+		var body struct {
+			Reason string `json:"reason"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		reason = body.Reason
+	}
+	if !fn(h.userActioner, uint(serverID), uint32(sessionID), reason) {
+		http.Error(w, `{"error":"user not found"}`, http.StatusNotFound)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 // Status returns overall server statistics.
 func (h *ServerHandler) Status(w http.ResponseWriter, r *http.Request) {
 	var serverCount, channelCount int64
 	h.db.Model(&models.VirtualServer{}).Count(&serverCount)
 	h.db.Model(&models.Channel{}).Count(&channelCount)
 	meta, _ := config.LoadMetaConfig(h.db)
-	restPort := 9090
+	restPort := 64730
 	if meta != nil {
 		restPort = meta.RESTPort
 	}

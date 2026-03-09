@@ -110,7 +110,7 @@ func ConfigForServer(meta *MetaConfig, server *ServerConfigData, bootstrap *Conf
 			SecurityMode: "legacy",
 			Host:         "0.0.0.0",
 			MumblePort:   64738,
-			RESTPort:     9090,
+			RESTPort:     64730,
 			JWTIssuer:    "go-mumble-server",
 			JWTAudience:  "go-mumble-server-api",
 			JWTExpiryDays: 30,

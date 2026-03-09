@@ -38,11 +38,12 @@ func APIUserIDToDBID(userID uint32) uint {
 	return uint(userID & APIUserIDMask)
 }
 
-// IsAdminForDisplay returns true if the user has admin privileges (SuperUser, API admin, or stored admin group).
+// IsAdminForDisplay returns true if the user has admin privileges (API admin or stored admin group).
 // Used by the REST API when returning connected users for display in the channel tree.
+// Note: userID 0 (server-password users not in registered_users) are not shown as admin.
 func IsAdminForDisplay(db *gorm.DB, serverID uint, userID uint32) bool {
 	if userID == 0 {
-		return true
+		return false
 	}
 	if IsAPIUserID(userID) {
 		return ResolveAPIAdmin(db, userID)

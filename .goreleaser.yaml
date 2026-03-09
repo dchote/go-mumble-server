@@ -43,5 +43,7 @@ nfpms:
       postinstall: scripts/postinstall.sh
       preremove: scripts/preremove.sh
     deb:
+      recommends:
+        - caddy
       lintian_overrides:
         - statically-linked-binary

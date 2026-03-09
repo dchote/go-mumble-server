@@ -20,20 +20,18 @@ import (
 
 // ConnectedUser is a connected Mumble user for the REST API.
 type ConnectedUser struct {
-	SessionID uint32 `json:"session_id"`
-	UserID    uint32 `json:"user_id"`
-	Name      string `json:"name"`
-	ChannelID uint32 `json:"channel_id"`
-	SelfMute  bool   `json:"self_mute"`
-	SelfDeaf  bool   `json:"self_deaf"`
-	Mute      bool   `json:"mute"`
-	Deaf      bool   `json:"deaf"`
-	IsAdmin   bool   `json:"is_admin"`
-}
-
-// Router sets up the REST API and optionally serves the embedded SPA.
-func Router(db *gorm.DB, cfg *config.Config, feFS fs.FS) http.Handler {
-	return RouterWithMumble(db, cfg, feFS, nil, nil, nil, nil)
+	SessionID     uint32  `json:"session_id"`
+	UserID        uint32  `json:"user_id"`
+	Name          string  `json:"name"`
+	ChannelID     uint32  `json:"channel_id"`
+	Address       string  `json:"address"`
+	Ping          float32 `json:"ping"`
+	CertificateHash string `json:"certificate_hash,omitempty"` // SHA-1 hex of client cert; empty if none
+	SelfMute      bool    `json:"self_mute"`
+	SelfDeaf      bool    `json:"self_deaf"`
+	Mute          bool    `json:"mute"`
+	Deaf          bool    `json:"deaf"`
+	IsAdmin       bool    `json:"is_admin"`
 }
 
 // GetChannelManager returns the channel manager for a server ID, or nil.
@@ -43,13 +41,16 @@ type GetChannelManager func(serverID uint) *channel.Manager
 // OnACLChange is called when ACLs are modified via REST (for cache invalidation).
 type OnACLChange func(serverID uint)
 
+// OnBanChange is called when bans are created or deleted via REST (for Mumble cache invalidation).
+type OnBanChange func(serverID uint)
+
 // RouterWithMumble sets up the REST API with optional Mumble connected-user listing.
-func RouterWithMumble(db *gorm.DB, cfg *config.Config, feFS fs.FS, userLister handler.ConnectedUserLister, getChanMgr GetChannelManager, onACLChange OnACLChange, onChannelMutated handler.OnChannelMutated) http.Handler {
+func RouterWithMumble(db *gorm.DB, cfg *config.Config, feFS fs.FS, userLister handler.ConnectedUserLister, userActioner handler.ConnectedUserActioner, getChanMgr GetChannelManager, onACLChange OnACLChange, onBanChange OnBanChange, onChannelMutated handler.OnChannelMutated) http.Handler {
 	userSvc := service.NewUserService(db, cfg)
 	authHandler := handler.NewAuthHandler(userSvc, db, cfg)
 	userHandler := handler.NewUserHandler(userSvc)
-	serverHandler := handler.NewServerHandler(db, cfg, userLister, (func(serverID uint) *channel.Manager)(getChanMgr), onChannelMutated)
-	banHandler := handler.NewBanHandler(db)
+	serverHandler := handler.NewServerHandler(db, cfg, userLister, userActioner, (func(serverID uint) *channel.Manager)(getChanMgr), onChannelMutated)
+	banHandler := handler.NewBanHandler(db, (handler.OnBanChange)(onBanChange))
 	aclHandler := handler.NewACLHandler(db, onACLChange)
 	regUserHandler := handler.NewRegisteredUserHandler(db)
 
@@ -90,6 +91,9 @@ func RouterWithMumble(db *gorm.DB, cfg *config.Config, feFS fs.FS, userLister ha
 			r.Get("/servers/{id}/channels/{channelId}/acl", aclHandler.Get)
 			r.Put("/servers/{id}/channels/{channelId}/acl", aclHandler.Put)
 			r.Get("/servers/{id}/users", serverHandler.GetUsers)
+			r.Post("/servers/{id}/users/{sessionId}/kick", serverHandler.KickUser)
+			r.Post("/servers/{id}/users/{sessionId}/mute", serverHandler.MuteUser)
+			r.Post("/servers/{id}/users/{sessionId}/ban", serverHandler.BanUser)
 			r.Get("/servers/{id}/bans", banHandler.List)
 			r.Post("/servers/{id}/bans", banHandler.Create)
 			r.Delete("/servers/{id}/bans/{banId}", banHandler.Delete)

@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strconv"
 
+	"github.com/dchote/go-mumble-server/internal/auth"
 	"github.com/dchote/go-mumble-server/internal/database/models"
 	"github.com/go-chi/chi/v5"
 	"gorm.io/gorm"
@@ -79,12 +80,21 @@ func (h *RegisteredUserHandler) Create(w http.ResponseWriter, r *http.Request) {
 	if maxID.Valid && maxID.Int32 >= 0 {
 		nextID = maxID.Int32 + 1
 	}
+	passwordHash := ""
+	if body.Password != "" {
+		var err error
+		passwordHash, err = auth.HashArgon2id(body.Password)
+		if err != nil {
+			http.Error(w, `{"error":"failed to hash password"}`, http.StatusInternalServerError)
+			return
+		}
+	}
 	user := models.RegisteredUser{
-		ServerID: uint(serverID),
-		UserID:   nextID,
-		Name:     body.Name,
-		PasswordHash: body.Password, // TODO: hash with Argon2id
-		Email:    body.Email,
+		ServerID:     uint(serverID),
+		UserID:       nextID,
+		Name:         body.Name,
+		PasswordHash: passwordHash,
+		Email:        body.Email,
 	}
 	if err := h.db.Create(&user).Error; err != nil {
 		http.Error(w, `{"error":"failed to create user"}`, http.StatusInternalServerError)
@@ -134,7 +144,12 @@ func (h *RegisteredUserHandler) Update(w http.ResponseWriter, r *http.Request) {
 		updates["name"] = *body.Name
 	}
 	if body.Password != nil && *body.Password != "" {
-		updates["password_hash"] = *body.Password // TODO: hash
+		hash, err := auth.HashArgon2id(*body.Password)
+		if err != nil {
+			http.Error(w, `{"error":"failed to hash password"}`, http.StatusInternalServerError)
+			return
+		}
+		updates["password_hash"] = hash
 	}
 	if body.Email != nil {
 		updates["email"] = *body.Email

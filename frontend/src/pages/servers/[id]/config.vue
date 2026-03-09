@@ -1,13 +1,13 @@
 <template>
   <v-container>
-    <BrandCard title-class="text-h5" content-class="pa-4">
+    <StandardCard title-class="text-h5">
       <template #header>
         <BackButton :fallback="`/servers/${serverId}`" class="mr-2" />
         <span class="text-h5 header-truncate">Server configuration</span>
       </template>
       <v-card variant="flat" class="mb-4">
         <v-card-title class="pa-4 pb-0">Server Configuration</v-card-title>
-        <v-card-text class="pa-4 pt-4">
+        <v-card-text>
           <v-form @submit.prevent="handleSave">
             <v-alert v-if="error" type="error" density="compact" class="mb-4">{{ error }}</v-alert>
             <v-alert v-if="success" type="success" density="compact" class="mb-4">Settings saved.</v-alert>
@@ -84,14 +84,14 @@
           </v-form>
         </v-card-text>
       </v-card>
-    </BrandCard>
+    </StandardCard>
   </v-container>
 </template>
 
 <script setup>
 import { ref, computed, onMounted } from 'vue'
 import { useRoute } from 'vue-router'
-import BrandCard from '@/components/common/BrandCard.vue'
+import StandardCard from '@/components/common/StandardCard.vue'
 import BackButton from '@/components/common/BackButton.vue'
 import api from '@/utils/api'
 

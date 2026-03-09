@@ -2,9 +2,13 @@ package connection
 
 import (
 	"context"
+	"crypto/sha1"
+	"crypto/tls"
+	"encoding/hex"
 	"io"
 	"log/slog"
 	"net"
+	"strings"
 	"sync"
 	"time"
 
@@ -100,6 +104,21 @@ func (c *Conn) SetUser(name string, userID uint32, channelID uint32) {
 	c.user.name = name
 	c.user.userID = userID
 	c.user.channelID = channelID
+}
+
+// CertificateHash returns the SHA-1 hex fingerprint of the client's TLS certificate, or empty if unavailable.
+func (c *Conn) CertificateHash() string {
+	tlsConn, ok := c.Conn.(*tls.Conn)
+	if !ok {
+		return ""
+	}
+	state := tlsConn.ConnectionState()
+	if len(state.PeerCertificates) == 0 {
+		return ""
+	}
+	der := state.PeerCertificates[0].Raw
+	hash := sha1.Sum(der)
+	return strings.ToLower(hex.EncodeToString(hash[:]))
 }
 
 // UserName returns the username.

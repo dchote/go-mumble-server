@@ -122,6 +122,15 @@ func (m *Manager) Count() int {
 	return len(m.bySession)
 }
 
+// SetPing updates a user's ping (client-reported TCP RTT in ms). Thread-safe.
+func (m *Manager) SetPing(sessionID uint32, ping float32) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if u := m.bySession[sessionID]; u != nil {
+		u.Ping = ping
+	}
+}
+
 // SetChannel updates a user's channel.
 func (m *Manager) SetChannel(sessionID uint32, channelID uint32) {
 	m.mu.Lock()

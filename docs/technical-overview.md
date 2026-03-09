@@ -8,7 +8,7 @@ go-mumble-server is a native Go implementation of the Mumble voice chat server, 
 
 | Component | Technology |
 |-----------|-----------|
-| Language | Go 1.24+ |
+| Language | Go 1.25+ |
 | Protocol serialization | Native Go structs with hand-written wire encoding (no protobuf) |
 | Audio codec | Opus (primary), CELT (compatibility) |
 | UDP encryption | OCB2-AES128 (legacy mode) / AES-256-GCM (secure mode) |
@@ -70,7 +70,7 @@ The project is organized into two layers:
 │                                                              │
 │  ┌──────────────┐  ┌──────────────┐  ┌────────────────────┐ │
 │  │  TCP/TLS     │  │  UDP Voice   │  │  REST API + Web UI │ │
-│  │  Listener    │  │  Listener    │  │  :9090             │ │
+│  │  Listener    │  │  Listener    │  │  :64730            │ │
 │  │  :64738      │  │  :64738      │  │  /api  /docs  /    │ │
 │  └──────┬───────┘  └──────┬───────┘  └─────────┬──────────┘ │
 │         │                 │                     │            │
@@ -116,7 +116,7 @@ go-mumble-server binds three network interfaces:
 
 2. **Mumble UDP** (default `:64738`) — Voice data channel. AEAD-encrypted audio packets (OCB2-AES128 in legacy mode, AES-256-GCM in secure mode). Same port as TCP per Mumble protocol convention. The server echoes UDP pings so clients can confirm connectivity before using UDP for voice.
 
-3. **REST API + Web UI** (default `:9090`) — HTTP management interface with Swagger docs at `/docs` and an embedded Vue 3 + Vuetify management frontend. Used for administration, monitoring, and integration.
+3. **REST API + Web UI** (default `:64730`) — HTTP management interface with Swagger docs at `/docs` and an embedded Vue 3 + Vuetify management frontend. Used for administration, monitoring, and integration.
 
 ### Package Layout
 
@@ -305,7 +305,7 @@ Passwords are always stored as Argon2id hashes internally, even when the server 
 
 ### REST API
 
-The REST management API runs on a separate HTTP server (default port `9090`):
+The REST management API runs on a separate HTTP server (default port `64730`, configurable via `rest_port` in config or `MUMBLE_REST_PORT`):
 
 | Endpoint Group | Methods | Description |
 |----------------|---------|-------------|
@@ -315,7 +315,10 @@ The REST management API runs on a separate HTTP server (default port `9090`):
 | `/api/v1/servers/:id/channels` | GET, POST | Channel tree + create |
 | `/api/v1/servers/:id/channels/:channelId` | PATCH, DELETE | Update/delete channel |
 | `/api/v1/servers/:id/channels/:channelId/acl` | GET, PUT | Channel ACLs and groups |
-| `/api/v1/servers/:id/users` | GET | Connected Mumble users (includes `is_admin` for RBAC) |
+| `/api/v1/servers/:id/users` | GET | Connected Mumble users (includes `is_admin`, `certificate_hash` for RBAC) |
+| `/api/v1/servers/:id/users/:sessionId/kick` | POST | Kick connected user |
+| `/api/v1/servers/:id/users/:sessionId/mute` | POST | Mute/unmute connected user |
+| `/api/v1/servers/:id/users/:sessionId/ban` | POST | Ban and kick connected user |
 | `/api/v1/servers/:id/registered-users` | GET, POST | Registered user CRUD |
 | `/api/v1/servers/:id/registered-users/:userId` | PATCH, DELETE | Single registered user |
 | `/api/v1/servers/:id/bans` | GET, POST | Ban list CRUD |
@@ -362,12 +365,17 @@ The REST router serves the embedded frontend with SPA-aware fallback:
 - All other paths that don't match an API route serve `index.html`, allowing Vue Router to handle client-side routing.
 - Content-Type headers are set by file extension.
 
+**Patterns and guidelines:**
+
+- [Frontend Guide](patterns/frontend-guide.md) — Vue/Vuetify patterns, routing, API usage
+- [UI Style Guidelines](patterns/ui-style-guidelines.md) — Layout, spacing, tables, forms, Vuetify best practices
+
 **Development workflow:**
 
 For frontend development with hot reload, the Vite dev server runs separately and proxies API requests to the Go backend:
 
-- Go server: `go run ./cmd/go-mumble-server -frontend-embed=false` (REST API on `:9090`)
-- Vite dev: `cd frontend && yarn dev` (UI on `:3000`, proxies `/api`, `/docs`, `/health` to `:9090`)
+- Go server: `go run ./cmd/go-mumble-server -frontend-embed=false` (REST API on `:64730`)
+- Vite dev: `cd frontend && yarn dev` (UI on `:3000`, proxies `/api`, `/docs`, `/health` to `:64730`)
 
 The `-frontend-embed=false` flag disables SPA serving so the Go server only serves the API, avoiding conflicts with the Vite dev server.
 

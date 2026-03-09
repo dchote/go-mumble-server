@@ -14,7 +14,7 @@ mode = "legacy"
 # Mumble protocol port (TCP + UDP)
 port = 64738
 # REST management API port
-rest_port = 9090
+rest_port = 64730
 # Bind address
 host = "0.0.0.0"
 

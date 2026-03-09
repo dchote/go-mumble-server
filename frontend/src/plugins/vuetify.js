@@ -4,37 +4,49 @@ import { createVuetify } from 'vuetify'
 import * as components from 'vuetify/components'
 import * as directives from 'vuetify/directives'
 
-// Flat UI Colors - French palette (https://flatuicolors.com/palette/fr)
+// Material Design 3 color palette
 const theme = {
   light: {
+    dark: false,
     colors: {
-      primary: '#4a69bd',
-      secondary: '#3c6382',
-      accent: '#82ccdd',
-      success: '#78e08f',
-      warning: '#fa983a',
-      error: '#eb3b5a',
-      info: '#60a3bc',
+      primary: '#1976D2',
+      'primary-darken-1': '#1565C0',
+      secondary: '#424242',
+      'secondary-darken-1': '#303030',
+      accent: '#2196F3',
+      success: '#4CAF50',
+      warning: '#FF9800',
+      error: '#F44336',
+      info: '#2196F3',
     },
   },
   dark: {
+    dark: true,
     colors: {
-      primary: '#6a89cc',
-      secondary: '#60a3bc',
-      accent: '#82ccdd',
-      success: '#78e08f',
-      warning: '#fa983a',
-      error: '#eb3b5a',
-      info: '#60a3bc',
+      primary: '#42A5F5',
+      'primary-darken-1': '#1E88E5',
+      secondary: '#757575',
+      'secondary-darken-1': '#616161',
+      accent: '#64B5F6',
+      success: '#66BB6A',
+      warning: '#FFA726',
+      error: '#EF5350',
+      info: '#42A5F5',
     },
   },
 }
+
+const THEME_KEY = 'go-mumble-server:theme'
+const savedTheme = localStorage.getItem(THEME_KEY)
+const initialTheme = savedTheme === 'dark' || savedTheme === 'light' ? savedTheme : 'dark'
 
 export default createVuetify({
   components,
   directives,
   theme: {
-    defaultTheme: 'light',
+    defaultTheme: initialTheme,
     themes: theme,
   },
 })
+
+export { THEME_KEY }

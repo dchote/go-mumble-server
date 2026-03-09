@@ -18,7 +18,7 @@
 
     <v-window v-model="activeTab" class="mb-4">
       <v-window-item value="groups">
-        <div class="d-flex align-center gap-2 mb-3">
+        <div class="d-flex align-center mb-3">
           <v-btn size="small" color="primary" variant="tonal" @click="addGroup">Add group</v-btn>
         </div>
         <v-table v-if="editedGroups.length" density="compact">
@@ -65,7 +65,7 @@
       </v-window-item>
 
       <v-window-item value="acls">
-        <div class="d-flex align-center gap-2 mb-3">
+        <div class="d-flex align-center mb-3">
           <v-btn size="small" color="primary" variant="tonal" @click="addACL">Add ACL rule</v-btn>
         </div>
         <v-table v-if="editedACLs.length" density="compact">

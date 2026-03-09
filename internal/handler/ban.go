@@ -13,14 +13,18 @@ import (
 	"gorm.io/gorm"
 )
 
+// OnBanChange is called when bans are created or deleted via REST (to reload Mumble's in-memory cache).
+type OnBanChange func(serverID uint)
+
 // BanHandler handles ban REST endpoints.
 type BanHandler struct {
-	db *gorm.DB
+	db          *gorm.DB
+	onBanChange OnBanChange
 }
 
-// NewBanHandler creates a BanHandler.
-func NewBanHandler(db *gorm.DB) *BanHandler {
-	return &BanHandler{db: db}
+// NewBanHandler creates a BanHandler. onBanChange may be nil.
+func NewBanHandler(db *gorm.DB, onBanChange OnBanChange) *BanHandler {
+	return &BanHandler{db: db, onBanChange: onBanChange}
 }
 
 // List returns all bans for a server.
@@ -123,6 +127,9 @@ func (h *BanHandler) Create(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"failed to create ban"}`, http.StatusInternalServerError)
 		return
 	}
+	if h.onBanChange != nil {
+		h.onBanChange(uint(serverID))
+	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
 	json.NewEncoder(w).Encode(map[string]interface{}{
@@ -157,6 +164,9 @@ func (h *BanHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	if err := h.db.Delete(&ban).Error; err != nil {
 		http.Error(w, `{"error":"failed to delete ban"}`, http.StatusInternalServerError)
 		return
+	}
+	if h.onBanChange != nil {
+		h.onBanChange(uint(serverID))
 	}
 	w.WriteHeader(http.StatusNoContent)
 }

@@ -1,6 +1,6 @@
 <template>
   <v-container>
-    <BrandCard title-class="text-h5" content-class="pa-3 pa-sm-6">
+    <StandardCard title-class="text-h5">
       <template #header>
         <BackButton fallback="/servers" class="mr-2" />
         <span class="text-h5 header-truncate">{{ server?.name || `Server ${serverId}` }}</span>
@@ -11,17 +11,27 @@
           </template>
           <v-list density="compact">
             <v-list-item prepend-icon="mdi-pencil" title="Edit server" @click="openEdit" />
-            <v-list-item prepend-icon="mdi-delete" title="Delete" @click="showDeleteConfirm = true" />
+            <v-tooltip location="top" text="This has not been tested yet">
+              <template #activator="{ props: tooltipProps }">
+                <v-list-item
+                  v-bind="tooltipProps"
+                  prepend-icon="mdi-delete"
+                  title="Delete server"
+                  @click="showDeleteConfirm = true"
+                />
+              </template>
+            </v-tooltip>
           </v-list>
         </v-menu>
       </template>
       <v-alert v-if="error" type="error" density="compact" class="mb-4">{{ error }}</v-alert>
 
       <div class="mb-4">
-        <p class="text-body-2 text-medium-emphasis mb-0">
-          <strong>Address:</strong> {{ server?.host || '-' }}:{{ server?.port || '-' }}
-          <span class="ml-4"><strong>Max users:</strong> {{ server?.max_users ?? '-' }}</span>
-        </p>
+        <ServerStatusInfo
+          :channel-count="totalChannelCount"
+          :max-users="server?.max_users"
+          :connected-users="users?.length ?? 0"
+        />
       </div>
 
       <div class="section-header d-flex align-center mb-2">
@@ -48,6 +58,7 @@
         @edit="openEditChannel"
         @acl="openACL"
         @delete="openDeleteChannel"
+        @user-action="handleUserAction"
       />
 
       <div class="section-header d-flex align-center mt-6 mb-2">
@@ -57,7 +68,7 @@
       </div>
       <v-progress-linear v-if="bansLoading" indeterminate class="mb-2" />
       <p v-else-if="bans.length === 0" class="text-body-2 mb-2">No bans.</p>
-      <v-table v-else density="compact" class="mb-4">
+      <v-table v-else density="comfortable" class="mb-4">
         <thead>
           <tr>
             <th>Address / Hash</th>
@@ -83,7 +94,7 @@
       </div>
       <v-progress-linear v-if="regUsersLoading" indeterminate class="mb-2" />
       <p v-else-if="regUsers.length === 0" class="text-body-2 mb-2">No registered users.</p>
-      <v-table v-else density="compact" class="mb-4">
+      <v-table v-else density="comfortable" class="mb-4">
         <thead>
           <tr>
             <th>Name</th>
@@ -125,6 +136,50 @@
         @updated="loadChannels"
       />
       <ACLDialog v-model="showACLDialog" :server-id="serverId" :channel="aclChannel" />
+      <StandardDialog v-model="showMuteDialog" title="Mute user?" max-width="400" @close="muteTarget = null">
+        <p>{{ muteTarget?.mute ? `Unmute ${muteTarget?.name || 'this user'}?` : `Mute ${muteTarget?.name || 'this user'}? They will not be able to speak until unmuted.` }}</p>
+        <template #actions>
+          <v-spacer />
+          <v-btn variant="text" class="mr-2" @click="showMuteDialog = false">Cancel</v-btn>
+          <v-btn color="primary" variant="elevated" :loading="userActionLoading" @click="confirmMute">
+            {{ muteTarget?.mute ? 'Unmute' : 'Mute' }}
+          </v-btn>
+        </template>
+      </StandardDialog>
+      <StandardDialog v-model="showKickDialog" title="Kick user?" max-width="400" @close="kickTarget = null">
+        <p class="mb-4">Kick {{ kickTarget?.name || 'this user' }}? They can reconnect.</p>
+        <v-text-field
+          v-model="kickReason"
+          label="Reason (optional)"
+          variant="outlined"
+          density="compact"
+          hide-details="auto"
+          autocomplete="off"
+          class="mb-2"
+        />
+        <template #actions>
+          <v-spacer />
+          <v-btn variant="text" class="mr-2" @click="showKickDialog = false">Cancel</v-btn>
+          <v-btn color="primary" variant="elevated" :loading="userActionLoading" @click="confirmKick">Kick</v-btn>
+        </template>
+      </StandardDialog>
+      <StandardDialog v-model="showBanDialog" title="Ban user?" max-width="400" @close="banTarget = null">
+        <p class="mb-4">Ban {{ banTarget?.name || 'this user' }}? They will be kicked and blocked from reconnecting.</p>
+        <v-text-field
+          v-model="banReason"
+          label="Reason (optional)"
+          variant="outlined"
+          density="compact"
+          hide-details="auto"
+          autocomplete="off"
+          class="mb-2"
+        />
+        <template #actions>
+          <v-spacer />
+          <v-btn variant="text" class="mr-2" @click="showBanDialog = false">Cancel</v-btn>
+          <v-btn color="error" variant="elevated" :loading="userActionLoading" @click="confirmBan">Ban</v-btn>
+        </template>
+      </StandardDialog>
       <StandardDialog v-model="showDeleteChannelDialog" title="Delete channel?" max-width="400" @close="deletingChannel = null">
         <p>Are you sure you want to delete "{{ deletingChannel?.name || 'this channel' }}"? It must have no subchannels.</p>
         <template #actions>
@@ -195,20 +250,21 @@
           <v-btn color="primary" variant="elevated" :loading="addBanLoading" @click="submitBan">Add</v-btn>
         </template>
       </StandardDialog>
-    </BrandCard>
+    </StandardCard>
   </v-container>
 </template>
 
 <script setup>
 import { ref, computed, onMounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import BrandCard from '@/components/common/BrandCard.vue'
+import StandardCard from '@/components/common/StandardCard.vue'
 import BackButton from '@/components/common/BackButton.vue'
 import StandardDialog from '@/components/common/StandardDialog.vue'
 import ChannelTree from '@/components/ChannelTree.vue'
 import CreateChannelDialog from '@/components/channels/CreateChannelDialog.vue'
 import EditChannelDialog from '@/components/channels/EditChannelDialog.vue'
 import EditServerDialog from '@/components/servers/EditServerDialog.vue'
+import ServerStatusInfo from '@/components/servers/ServerStatusInfo.vue'
 import ACLDialog from '@/components/channels/ACLDialog.vue'
 import api from '@/utils/api'
 
@@ -234,6 +290,13 @@ const showEditDialog = ref(false)
 const showDeleteConfirm = ref(false)
 
 const serverId = computed(() => route.params.id)
+
+function countChannels(channels) {
+  if (!channels?.length) return 0
+  return channels.reduce((acc, ch) => 1 + acc + countChannels(ch.children || []), 0)
+}
+
+const totalChannelCount = computed(() => countChannels(channelTree.value))
 const showCreateChannelDialog = ref(false)
 const createChannelParentId = ref(0)
 const showEditChannelDialog = ref(false)
@@ -244,6 +307,15 @@ const showDeleteChannelDialog = ref(false)
 const deletingChannel = ref(null)
 const deleteChannelLoading = ref(false)
 const deleteServerLoading = ref(false)
+const showKickDialog = ref(false)
+const showMuteDialog = ref(false)
+const showBanDialog = ref(false)
+const kickTarget = ref(null)
+const muteTarget = ref(null)
+const banTarget = ref(null)
+const kickReason = ref('')
+const banReason = ref('')
+const userActionLoading = ref(false)
 
 function openEdit() {
   showEditDialog.value = true
@@ -264,6 +336,69 @@ function openACL(ch) {
 function openDeleteChannel(ch) {
   deletingChannel.value = ch
   showDeleteChannelDialog.value = true
+}
+
+function handleUserAction({ user, action }) {
+  if (action === 'mute') {
+    muteTarget.value = user
+    showMuteDialog.value = true
+  } else if (action === 'kick') {
+    kickTarget.value = user
+    kickReason.value = ''
+    showKickDialog.value = true
+  } else if (action === 'ban') {
+    banTarget.value = user
+    banReason.value = ''
+    showBanDialog.value = true
+  }
+}
+
+async function confirmMute() {
+  if (!muteTarget.value) return
+  userActionLoading.value = true
+  try {
+    await api.post(`/servers/${serverId.value}/users/${muteTarget.value.session_id}/mute`, { mute: !muteTarget.value.mute })
+    showMuteDialog.value = false
+    muteTarget.value = null
+    loadUsers()
+  } catch (e) {
+    error.value = e.message || 'Failed to update mute'
+  } finally {
+    userActionLoading.value = false
+  }
+}
+
+async function confirmKick() {
+  if (!kickTarget.value) return
+  userActionLoading.value = true
+  try {
+    await api.post(`/servers/${serverId.value}/users/${kickTarget.value.session_id}/kick`, { reason: kickReason.value || undefined })
+    showKickDialog.value = false
+    kickTarget.value = null
+    kickReason.value = ''
+    loadUsers()
+  } catch (e) {
+    error.value = e.message || 'Failed to kick user'
+  } finally {
+    userActionLoading.value = false
+  }
+}
+
+async function confirmBan() {
+  if (!banTarget.value) return
+  userActionLoading.value = true
+  try {
+    await api.post(`/servers/${serverId.value}/users/${banTarget.value.session_id}/ban`, { reason: banReason.value || undefined })
+    showBanDialog.value = false
+    banTarget.value = null
+    banReason.value = ''
+    loadUsers()
+    loadBans()
+  } catch (e) {
+    error.value = e.message || 'Failed to ban user'
+  } finally {
+    userActionLoading.value = false
+  }
 }
 async function confirmDeleteServer() {
   if (!server.value?.id) return

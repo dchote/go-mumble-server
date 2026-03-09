@@ -258,6 +258,11 @@ func (s *Server) ACLEvaluator() *acl.Evaluator {
 	return s.acl
 }
 
+// BanManager returns the ban manager (for cache invalidation when bans change via REST).
+func (s *Server) BanManager() *ban.Manager {
+	return s.bans
+}
+
 // BroadcastChannelState broadcasts a channel's state to all connected clients.
 // Used when channels are created/updated via REST so Mumble clients see the changes.
 func (s *Server) BroadcastChannelState(ch *mumble.Channel) {
@@ -291,6 +296,95 @@ func (s *Server) UnregisterConn(sessionID uint32) {
 	})
 }
 
+// KickSession kicks a user (server-initiated, e.g. from REST API). Actor 0 = server.
+func (s *Server) KickSession(sessionID uint32, reason string) bool {
+	u, ok := s.users.GetUser(sessionID)
+	if !ok {
+		return false
+	}
+	targetConn := s.conn(sessionID)
+	ur := &messages.UserRemove{Session: sessionID, Actor: 0, Reason: reason, Ban: false}
+	s.Broadcast(0, protocol.MessageUserRemove, ur)
+	s.users.Remove(sessionID)
+	s.UnregisterConn(sessionID)
+	if targetConn != nil {
+		targetConn.Close()
+	}
+	slog.Info("User kicked via REST", "session", sessionID, "name", u.Name, "reason", reason)
+	return true
+}
+
+// MuteSession sets server mute state for a user.
+func (s *Server) MuteSession(sessionID uint32, mute bool) bool {
+	u, ok := s.users.GetUser(sessionID)
+	if !ok {
+		return false
+	}
+	u.Mute = mute
+	state := userToState(u)
+	state.Actor = 0
+	s.Broadcast(0, protocol.MessageUserState, state)
+	slog.Info("User mute changed via REST", "session", sessionID, "name", u.Name, "mute", mute)
+	return true
+}
+
+// BanAndKickSession bans the user by IP and kicks them.
+func (s *Server) BanAndKickSession(sessionID uint32, reason string) bool {
+	u, ok := s.users.GetUser(sessionID)
+	if !ok {
+		return false
+	}
+	targetConn := s.conn(sessionID)
+	var ip net.IP
+	if u.Address != "" {
+		ip = net.ParseIP(u.Address)
+	}
+	if ip == nil && targetConn != nil {
+		if addr := targetConn.RemoteAddr(); addr != nil {
+			if host, _, err := net.SplitHostPort(addr.String()); err == nil {
+				ip = net.ParseIP(host)
+			}
+		}
+	}
+	existing := s.bans.List()
+	// Ban by cert hash when available (persists across IP changes); otherwise by IP.
+	if u.CertHash != "" {
+		newBan := messages.BanEntry{
+			Hash:   strings.ToLower(u.CertHash),
+			Name:   u.Name,
+			Reason: reason,
+			Start:  time.Now().Format(time.RFC3339),
+		}
+		existing = append(existing, newBan)
+		_ = s.bans.Replace(existing)
+	} else if ip != nil {
+		mask := uint32(32)
+		if ip4 := ip.To4(); ip4 != nil {
+			ip = ip4
+		} else {
+			mask = 128
+		}
+		newBan := messages.BanEntry{
+			Address: ip,
+			Mask:    mask,
+			Name:    u.Name,
+			Reason:  reason,
+			Start:   time.Now().Format(time.RFC3339),
+		}
+		existing = append(existing, newBan)
+		_ = s.bans.Replace(existing)
+	}
+	ur := &messages.UserRemove{Session: sessionID, Actor: 0, Reason: reason, Ban: true}
+	s.Broadcast(0, protocol.MessageUserRemove, ur)
+	s.users.Remove(sessionID)
+	s.UnregisterConn(sessionID)
+	if targetConn != nil {
+		targetConn.Close()
+	}
+	slog.Info("User banned and kicked via REST", "session", sessionID, "name", u.Name, "reason", reason)
+	return true
+}
+
 // Broadcast sends a message to all connections except skipSession.
 func (s *Server) Broadcast(skipSession uint32, msgType protocol.MessageType, msg messages.Message) {
 	s.connMu.RLock()
@@ -322,7 +416,8 @@ func (s *Server) handleAuthenticate(msgType protocol.MessageType, payload []byte
 		return err
 	}
 	addr := c.RemoteAddr()
-	if s.bans.IsBanned(addr, "") {
+	certHash := c.CertificateHash()
+	if s.bans.IsBanned(addr, certHash) {
 		return s.sendReject(c, messages.RejectWrongServerPW, "Banned")
 	}
 	if authMsg.Username == "" {
@@ -361,7 +456,15 @@ func (s *Server) handleAuthenticate(msgType protocol.MessageType, payload []byte
 	userID := uint32(0)
 	if apiUserID != 0 {
 		userID = acl.MakeAPIUserID(apiUserID)
-	} else if uid, _, found := s.lookupRegisteredUser(authMsg.Username); found {
+	} else if uid, hash, found := s.lookupRegisteredUser(authMsg.Username); found {
+		if authMsg.Password != "" && hash != "" {
+			// Verify password: Argon2id (registered users) or bcrypt (legacy)
+			valid := (strings.HasPrefix(hash, "$argon2id$") && auth.CompareArgon2id(hash, authMsg.Password)) ||
+				(strings.HasPrefix(hash, "$2") && auth.ComparePassword(hash, authMsg.Password))
+			if !valid {
+				return s.sendReject(c, messages.RejectWrongServerPW, "Wrong password")
+			}
+		}
 		userID = uid
 	}
 	u := &mumble.User{
@@ -371,6 +474,14 @@ func (s *Server) handleAuthenticate(msgType protocol.MessageType, payload []byte
 		Name:         authMsg.Username,
 		AccessTokens: authMsg.Tokens,
 	}
+	if addr != nil {
+		if host, _, err := net.SplitHostPort(addr.String()); err == nil {
+			u.Address = host
+		} else {
+			u.Address = addr.String()
+		}
+	}
+	u.CertHash = certHash
 	if !s.users.Add(u) {
 		return s.sendReject(c, messages.RejectServerFull, "Server full")
 	}
@@ -498,6 +609,9 @@ func (s *Server) handlePing(msgType protocol.MessageType, payload []byte, ctx in
 			return err
 		}
 		resp.Timestamp = p.Timestamp
+		if p.TCPPingAvg > 0 {
+			s.users.SetPing(c.SessionID(), p.TCPPingAvg)
+		}
 	}
 	if resp.Timestamp == 0 {
 		resp.Timestamp = uint64(time.Now().UnixMicro())

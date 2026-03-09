@@ -1,6 +1,6 @@
 <template>
   <v-container>
-    <BrandCard title-class="text-h5" content-class="pa-3 pa-sm-6">
+    <StandardCard title-class="text-h5">
       <template #header>
         <BackButton :fallback="`/servers/${serverId}`" class="mr-2" />
         <span class="text-h5 header-truncate">{{ channel?.name || `Channel ${channelId}` }}</span>
@@ -55,14 +55,14 @@
         @created="loadChannel"
       />
       <ACLDialog v-model="showACLDialog" :server-id="serverId" :channel="channel" />
-    </BrandCard>
+    </StandardCard>
   </v-container>
 </template>
 
 <script setup>
 import { ref, computed, onMounted, watch } from 'vue'
 import { useRoute } from 'vue-router'
-import BrandCard from '@/components/common/BrandCard.vue'
+import StandardCard from '@/components/common/StandardCard.vue'
 import BackButton from '@/components/common/BackButton.vue'
 import EditChannelDialog from '@/components/channels/EditChannelDialog.vue'
 import CreateChannelDialog from '@/components/channels/CreateChannelDialog.vue'

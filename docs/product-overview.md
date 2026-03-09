@@ -71,7 +71,7 @@ go-mumble-server implements the complete Mumble server feature set:
 
 ## Web Management UI
 
-go-mumble-server ships with a Vue 3 + Vuetify management frontend embedded directly into the server binary. Open `http://localhost:9090` to access:
+go-mumble-server ships with a Vue 3 + Vuetify management frontend embedded directly into the server binary. Open `http://localhost:64730` to access:
 
 - Server status dashboard and health monitoring
 - Channel tree visualization and management
@@ -85,7 +85,7 @@ The frontend is built with Vite and embedded via Go's `//go:embed` — no separa
 
 ## REST Management API
 
-The web UI is a consumer of the REST API, which is also available for direct integration. The REST API runs on port `9090` (configurable):
+The web UI is a consumer of the REST API, which is also available for direct integration. The REST API runs on port `64730` by default (configurable via `rest_port` in config or `MUMBLE_REST_PORT`):
 
 - Server status, health, and statistics
 - Channel and user management

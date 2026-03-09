@@ -1,10 +1,15 @@
 <template>
   <v-container>
-    <BrandCard content-class="pa-3 pa-sm-6">
+    <StandardCard>
       <template #header>
         <span class="text-h5 header-title">Virtual Servers</span>
         <v-spacer />
-        <v-btn color="primary" variant="elevated" size="small" @click="showCreate = true">
+        <v-btn
+          color="primary"
+          variant="elevated"
+          size="small"
+          @click="showCreate = true"
+        >
           <v-icon start size="small">mdi-plus</v-icon>
           Create server
         </v-btn>
@@ -13,70 +18,94 @@
       <v-sheet v-if="loading">
         <v-progress-linear indeterminate color="primary" />
       </v-sheet>
-      <div v-else-if="servers.length > 0" class="servers-list">
-        <router-link
-          v-for="s in servers"
-          :key="s.id"
-          :to="`/servers/${s.id}`"
-          class="server-list-item"
-        >
-          <v-icon size="small" color="grey" class="mr-2">mdi-server</v-icon>
-          <span class="text-body-1 font-weight-medium flex-grow-1">{{ s.name || 'Unnamed' }}</span>
-          <span class="text-body-2 text-medium-emphasis">{{ s.host }}:{{ s.port }}</span>
-        </router-link>
-      </div>
-      <p v-else class="text-body-2 text-medium-emphasis pa-4">No virtual servers.</p>
+      <v-data-table
+        v-else-if="servers.length > 0"
+        :items="servers"
+        :headers="headers"
+        density="comfortable"
+        :items-per-page="50"
+        class="servers-table"
+      >
+        <template #bottom></template>
+        <template #item.name="{ item }">
+          <router-link :to="`/servers/${item.id}`" class="text-primary text-decoration-none font-weight-medium">
+            {{ item.name || 'Unnamed' }}
+          </router-link>
+        </template>
+        <template #item.channelCount="{ item }">
+          {{ getServerStats(item.id).channelCount ?? '-' }}
+        </template>
+        <template #item.connectedUsers="{ item }">
+          {{ getServerStats(item.id).connectedUsers ?? '-' }}
+        </template>
+      </v-data-table>
+      <p v-else class="text-body-2 text-medium-emphasis">No virtual servers.</p>
 
       <CreateServerDialog
         v-model="showCreate"
-        :default-host="status?.mumble_port ? '0.0.0.0' : '0.0.0.0'"
+        default-host="0.0.0.0"
         :default-port="status?.mumble_port || 64738"
         @created="onCreated"
       />
-      <EditServerDialog
-        v-model="showEdit"
-        :server="editingServer"
-        @updated="onUpdated"
-      />
-      <StandardDialog
-        v-model="showDelete"
-        title="Delete server?"
-        max-width="400"
-        @close="deletingServer = null"
-      >
-        <p>Are you sure you want to delete "{{ deletingServer?.name || 'this server' }}"?</p>
-        <template #actions>
-          <v-spacer />
-          <v-btn variant="text" class="mr-2" @click="showDelete = false">Cancel</v-btn>
-          <v-btn color="error" variant="elevated" :loading="deleteLoading" @click="confirmDelete">Delete</v-btn>
-        </template>
-      </StandardDialog>
-    </BrandCard>
+    </StandardCard>
   </v-container>
 </template>
 
 <script setup>
 import { ref, onMounted } from 'vue'
-import BrandCard from '@/components/common/BrandCard.vue'
-import StandardDialog from '@/components/common/StandardDialog.vue'
+import StandardCard from '@/components/common/StandardCard.vue'
 import CreateServerDialog from '@/components/servers/CreateServerDialog.vue'
-import EditServerDialog from '@/components/servers/EditServerDialog.vue'
 import api from '@/utils/api'
 
 const servers = ref([])
 const status = ref(null)
+const serverStats = ref({})
 const error = ref('')
 const loading = ref(true)
 const showCreate = ref(false)
-const showEdit = ref(false)
-const editingServer = ref(null)
-const showDelete = ref(false)
-const deletingServer = ref(null)
-const deleteLoading = ref(false)
+
+const headers = [
+  { title: 'Name', key: 'name', sortable: true },
+  { title: 'Channel Count', key: 'channelCount' },
+  { title: 'Max Users', key: 'max_users' },
+  { title: 'Connected Users', key: 'connectedUsers' },
+]
+
+function countChannels(channels) {
+  if (!channels?.length) return 0
+  return channels.reduce((acc, ch) => 1 + acc + countChannels(ch.children || []), 0)
+}
+
+function getServerStats(serverId) {
+  return serverStats.value[serverId] ?? {}
+}
+
+async function loadServerStats(serverList) {
+  const stats = {}
+  await Promise.all(
+    serverList.map(async (s) => {
+      try {
+        const [channels, users] = await Promise.all([
+          api.get(`/servers/${s.id}/channels`).catch(() => []),
+          api.get(`/servers/${s.id}/users`).catch(() => []),
+        ])
+        stats[s.id] = {
+          channelCount: Array.isArray(channels) ? countChannels(channels) : 0,
+          connectedUsers: Array.isArray(users) ? users.length : 0,
+        }
+      } catch {
+        stats[s.id] = {}
+      }
+    })
+  )
+  serverStats.value = stats
+}
 
 async function loadServers() {
   try {
-    servers.value = await api.get('/servers')
+    const list = await api.get('/servers')
+    servers.value = list
+    await loadServerStats(list)
   } catch (e) {
     error.value = e.message || 'Failed to load servers'
   } finally {
@@ -90,6 +119,7 @@ onMounted(async () => {
     const [srvList, st] = await Promise.all([api.get('/servers'), api.get('/status').catch(() => null)])
     servers.value = srvList
     status.value = st
+    await loadServerStats(srvList)
   } catch (e) {
     error.value = e.message || 'Failed to load servers'
   } finally {
@@ -100,53 +130,5 @@ onMounted(async () => {
 function onCreated() {
   loadServers()
 }
-
-function openEdit(s) {
-  editingServer.value = s
-  showEdit.value = true
-}
-
-function onUpdated() {
-  loadServers()
-}
-
-function openDeleteConfirm(s) {
-  deletingServer.value = s
-  showDelete.value = true
-}
-
-async function confirmDelete() {
-  if (!deletingServer.value) return
-  deleteLoading.value = true
-  try {
-    await api.delete(`/servers/${deletingServer.value.id}`)
-    showDelete.value = false
-    deletingServer.value = null
-    loadServers()
-  } catch (e) {
-    error.value = e.message || 'Failed to delete server'
-  } finally {
-    deleteLoading.value = false
-  }
-}
 </script>
 
-<style scoped>
-.server-list-item {
-  display: flex;
-  align-items: center;
-  padding: 12px 0;
-  text-decoration: none;
-  color: inherit;
-  border-bottom: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
-  transition: background-color 0.2s;
-}
-
-.server-list-item:last-child {
-  border-bottom: none;
-}
-
-.server-list-item:hover {
-  background-color: rgba(var(--v-theme-on-surface), 0.04);
-}
-</style>

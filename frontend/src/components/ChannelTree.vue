@@ -10,6 +10,7 @@
       @edit="(ch) => $emit('edit', ch)"
       @acl="(ch) => $emit('acl', ch)"
       @delete="(ch) => $emit('delete', ch)"
+      @user-action="(e) => $emit('user-action', e)"
     />
   </div>
 </template>
@@ -31,5 +32,5 @@ defineProps({
     default: () => [],
   },
 })
-defineEmits(['create-sub', 'edit', 'acl', 'delete'])
+defineEmits(['create-sub', 'edit', 'acl', 'delete', 'user-action'])
 </script>

@@ -23,15 +23,15 @@ export default defineConfig({
     port: 3000,
     proxy: {
       '/api': {
-        target: process.env.VITE_API_PROXY_TARGET || 'http://localhost:9090',
+        target: process.env.VITE_API_PROXY_TARGET || 'http://localhost:64730',
         changeOrigin: true,
       },
       '/docs': {
-        target: process.env.VITE_API_PROXY_TARGET || 'http://localhost:9090',
+        target: process.env.VITE_API_PROXY_TARGET || 'http://localhost:64730',
         changeOrigin: true,
       },
       '/health': {
-        target: process.env.VITE_API_PROXY_TARGET || 'http://localhost:9090',
+        target: process.env.VITE_API_PROXY_TARGET || 'http://localhost:64730',
         changeOrigin: true,
       },
     },

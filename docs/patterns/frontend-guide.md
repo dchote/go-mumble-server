@@ -9,7 +9,7 @@ frontend/src/
 ├── layouts/            # Layout components (AuthenticatedLayout, DefaultLayout)
 ├── pages/              # Route components (file-based routing)
 ├── components/         # Reusable UI components
-│   └── common/         # Shared layout/form components (BrandCard, StandardDialog, etc.)
+│   └── common/         # Shared layout/form components (StandardCard, StandardDialog, etc.)
 ├── store/              # Vuex store
 │   ├── index.js
 │   └── modules/
@@ -39,10 +39,9 @@ frontend/src/
 
 Pages stay minimal and use shared components for layout, forms, and dialogs (mirrors recipe-project):
 
-- **BrandCard** (`components/common/BrandCard.vue`): Page layout card with title, optional header/toolbar/content/actions slots. Gradient header, top border.
+- **StandardCard** (`components/common/StandardCard.vue`): Page layout card with title, optional header/toolbar/content/actions slots. Gradient header, top border.
 - **StandardDialog** (`components/common/StandardDialog.vue`): Modal with header, content, actions. Use for confirmations instead of raw `v-dialog`.
 - **BackButton** (`components/common/BackButton.vue`): Icon-only back button for card headers; supports `fallback` route.
-- **ListToolbar** (`components/common/ListToolbar.vue`): Toolbar area for filters/controls below card header.
 
 Pages compose these components. Never duplicate card/dialog layouts in pages.
 
@@ -51,6 +50,7 @@ Pages compose these components. Never duplicate card/dialog layouts in pages.
 - **AuthenticatedLayout**: Used when `isAuthenticated`. App bar, nav drawer, user chip, logout.
 - **DefaultLayout**: Used when guest. App bar with Login/Signup CTA.
 - App.vue switches layouts based on auth state.
+- **Layout slot**: Layouts must not add padding around the slot. Each page uses `v-container`, which provides the page margins. Do not wrap the slot in `pa-4` or similar—it compounds with `v-container` and creates excessive margins.
 
 ## File-Based Routing (unplugin-vue-router)
 
@@ -68,7 +68,9 @@ The Vite config uses `importMode: 'sync'` so route components are statically imp
 
 - **All UI must use Vuetify components** — no raw HTML for forms, buttons, inputs, cards, dialogs
 - **Variant**: Use `variant="outlined"` for form inputs
-- **Density**: Use `density="compact"` for form inputs (login/register may use `comfortable` for accessibility)
+- **Form density**: Use `density="compact"` for form inputs (login/register may use `comfortable` for accessibility)
+- **Table density**: Use `density="comfortable"` for `v-table` and `v-data-table` displaying primary lists (users, servers, bans, registered users, connected clients). Use `density="compact"` only for nested tables (e.g. ACL dialog).
+- **v-data-table pagination**: Hide pagination/footer by default with an empty `#bottom` slot. Use `:items-per-page="50"` consistently.
 - **Hide details**: Use `hide-details="auto"` on inputs
 
 ## Form Input Properties

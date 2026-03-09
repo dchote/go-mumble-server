@@ -27,18 +27,19 @@ This document defines the visual design standards and patterns for the go-mumble
 
 ## Design Philosophy
 
-The app uses a **modern flat palette** with muted olives, charcoal, desaturated gold, and neutral greys. The aesthetic is minimal and professional—avoiding flashy gradients while using subtle depth where appropriate.
+The app uses a **Material Design 3** palette. The aesthetic is minimal and professional—avoiding flashy gradients while using subtle depth where appropriate.
 
 ## Color Palette
 
 Colors are defined in `frontend/src/styles/theme.scss` and `frontend/src/plugins/vuetify.js`.
 
-- **Primary**: Muted olive
-- **Secondary**: Charcoal
-- **Accent**: Desaturated gold
-- **Background**: Warm light grey
-- **Surface**: White
-- **Error**: Red for validation and destructive actions
+- **Primary**: Material Blue (#1976D2)
+- **Secondary**: Grey (#424242)
+- **Accent/Info**: Blue (#2196F3)
+- **Success**: Green (#4CAF50)
+- **Warning**: Orange (#FF9800)
+- **Error**: Red (#F44336)
+- **Background/Surface**: Theme-driven (light grey / dark)
 
 ## Typography
 
@@ -50,27 +51,42 @@ Colors are defined in `frontend/src/styles/theme.scss` and `frontend/src/plugins
 
 ## Spacing and Layout
 
+### Page Layout (Vuetify Best Practice)
+
+- **Main content**: Layouts (`AuthenticatedLayout`, `DefaultLayout`) must **not** add padding around the slot. Use `v-main` with the slot as direct child.
+- **Page padding**: Each page uses `v-container`, which provides responsive horizontal padding and max-width. This is the single source of page margins—do not compound with layout-level padding.
+- Avoid wrapping the layout slot in `pa-4` or similar; it creates excessive outer margins when combined with `v-container`.
+
 ### Content Padding
 
 - Use responsive padding: `pa-3 pa-sm-6` or `pa-3 pa-sm-4` for mobile-first scaling
 - Main content: 0 (xs), 20px/16px (600px+), 24px/20px (960px+)
 
+### Tables and Lists
+
+- **Primary list tables**: Use `density="comfortable"` for `v-table` and `v-data-table` displaying user lists, server lists, or other main content. This gives adequate vertical spacing between rows.
+- **Nested/auxiliary tables**: Use `density="compact"` only for tables inside dialogs (e.g. ACL editor) or secondary sections where space is constrained.
+- **v-data-table defaults**: Do not show pagination/footer by default—use an empty `#bottom` slot. Use `:items-per-page="50"` for consistent default page size.
+
 ### Border Radius
 
-- Cards: `8px`
-- **xs only**: Cards may use `border-radius: 0` for edge-to-edge feel on mobile
+- **Standard cards** (StandardCard, StandardPageCard): `0` (flat, edge-to-edge)
+- **Metric cards** (ServerStatusInfo): `8px`
+- **Dialogs**: `0` (sharp corners per brand-dialog-card)
 
 ## Component Patterns
 
 ### App Header
 
 - **Background**: Primary color gradient or solid primary
-- **User chip**: Use for username display when authenticated
+- **User menu**: Use `density="comfortable"` on the dropdown `v-list`. Add `px-3` to the user menu activator button for adequate horizontal padding. Use `mr-3` between avatar and text, `ml-2` before chevron icon.
+- **App bar buttons**: Add `px-2` to icon buttons for consistent touch targets and spacing.
 
 ### Cards
 
 - Use `v-card` with `variant="outlined"` or `variant="flat"` as appropriate
 - Add divider under `v-card-title` when using raw v-card
+- **v-card-text**: Has built-in padding—do not add `pa-4` or other padding classes
 
 ### Buttons
 
@@ -131,6 +147,11 @@ Colors are defined in `frontend/src/styles/theme.scss` and `frontend/src/plugins
 - **Responsive padding**: Prefer `pa-3 pa-sm-6` over fixed `pa-6`
 - Use `useDisplay()` from Vuetify for programmatic breakpoint checks
 - Ensure touch targets are adequately sized (min 44px)
+
+## Theme and Global CSS
+
+- **Avoid padding/margin overrides** in `theme.scss`. Use Vuetify's default component spacing and utility classes (`mb-4`, `px-3`, etc.) in templates where needed. Overriding component padding in global CSS fights Vuetify's design system.
+- **v-card-text**: Do not add `pa-4` or other padding to `v-card-text`; Vuetify provides built-in padding. StandardCard and StandardDialog use empty `contentClass`/`contentPadding` by default.
 
 ## Do Not
 

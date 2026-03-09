@@ -81,7 +81,7 @@ func defaults() *Config {
 		SecurityMode:  "legacy",
 		Host:          "0.0.0.0",
 		MumblePort:    64738,
-		RESTPort:      9090,
+		RESTPort:      64730,
 		FrontendEmbed: true,
 		DatabasePath:  "mumble-server.sqlite",
 		LogLevel:      "info",

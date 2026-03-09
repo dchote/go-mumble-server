@@ -10,10 +10,28 @@ go-mumble-server re-imagines the Mumble server with modern priorities: a single 
 
 **Mumble protocol on TCP/TLS :64738** — Full control channel with native Go message encoding (no protobuf).
 **Voice on UDP :64738** — Low-latency AEAD-encrypted audio with TCP tunnel fallback.
-**REST management API on :9090** — Administration and monitoring with Swagger docs at `/docs`.
+**REST management API on :64730** — Administration and monitoring with Swagger docs at `/docs`.
 **Web management UI** — Vue 3 + Vuetify frontend embedded in the binary, served alongside the REST API.
 
 Two **security modes**: **legacy** (100% backward compatible with all Mumble clients) and **secure** (modern crypto, breaks backward compatibility). Local storage is always encrypted regardless of mode.
+
+### Screenshots
+
+![Dashboard](images/dashboard.png)
+
+*Dashboard — virtual servers with channel counts and connected users.*
+
+![Virtual server details](images/virtual_server_details.png)
+
+*Virtual server details — channel tree, connected users, configuration, and registered users.*
+
+![Edit virtual server](images/virtual_server_edit.png)
+
+*Edit virtual server — configure name, port, welcome text, and limits.*
+
+![User actions](images/user_actions.png)
+
+*User actions — kick, mute, or ban connected users from the context menu.*
 
 ## Features
 
@@ -84,7 +102,7 @@ Use `-timeout=30s` to avoid hanging. For race detection: `CGO_ENABLED=1 go test 
 ## Running
 
 ```bash
-# Start with defaults (legacy mode, Mumble on :64738, REST on :9090)
+# Start with defaults (legacy mode, Mumble on :64738, REST on :64730)
 ./go-mumble-server
 
 # Start in secure mode
@@ -94,7 +112,7 @@ Use `-timeout=30s` to avoid hanging. For race detection: `CGO_ENABLED=1 go test 
 ./go-mumble-server -config /path/to/mumble-server.toml
 
 # With environment variables
-MUMBLE_SECURITY_MODE=secure MUMBLE_PORT=64738 MUMBLE_REST_PORT=9090 ./go-mumble-server
+MUMBLE_SECURITY_MODE=secure MUMBLE_MUMBLE_PORT=64738 MUMBLE_REST_PORT=64730 ./go-mumble-server
 ```
 
 ## Configuration
@@ -110,6 +128,7 @@ These are loaded from (in order of precedence): command-line flags, environment 
 
 | Setting | Env / Flag | Default | Description |
 |---------|-----------|---------|-------------|
+| REST port | `MUMBLE_REST_PORT` | `64730` | REST API + web UI port (also in TOML `network.rest_port`) |
 | Database path | `MUMBLE_DATABASE_PATH` | `mumble-server.sqlite` | SQLite database file |
 | TLS certificate | `MUMBLE_SSL_CERT_PATH` | (auto-generated) | TLS certificate (PEM) |
 | TLS key | `MUMBLE_SSL_KEY_PATH` | (auto-generated) | TLS private key (PEM) |
@@ -129,7 +148,7 @@ Managed via REST API (`/api/v1/meta/config`, `/api/v1/servers/:id/config`) and t
 | Security mode | `legacy` | `legacy` or `secure` |
 | Host | `0.0.0.0` | Bind address |
 | Mumble port | 64738 | Mumble protocol port (TCP + UDP) |
-| REST port | 9090 | REST API + web UI port |
+| REST port | 64730 | REST API + web UI port |
 | Bonjour | false | mDNS/Bonjour LAN discovery |
 | Register name | `go-mumble-server` | Display name for LAN discovery |
 
@@ -150,7 +169,7 @@ See [docs/technical-overview.md](docs/technical-overview.md) for the full config
 
 ## Web Management UI
 
-The server includes a Vue 3 + Vuetify management frontend that is embedded into the Go binary and served on the REST API port (default `:9090`). Open `http://localhost:9090` in a browser to access the management interface.
+The server includes a Vue 3 + Vuetify management frontend that is embedded into the Go binary and served on the REST API port (default `:64730`). Open `http://localhost:64730` in a browser to access the management interface.
 
 Features: server status dashboard, channel tree management, connected user list, ACL editor, ban list management, server configuration, and virtual server controls.
 
@@ -158,35 +177,35 @@ The frontend can be disabled at runtime with `-frontend-embed=false` for headles
 
 ## REST API
 
-The management API runs on port 9090 by default. Interactive Swagger documentation is available at `/docs`. The web UI is a consumer of this same REST API.
+The management API runs on port 64730 by default (configurable via `rest_port` in config or `MUMBLE_REST_PORT`). Interactive Swagger documentation is available at `/docs`. The web UI is a consumer of this same REST API. For production deployments with HTTPS and TLS termination, see [Deployment with Caddy](docs/deployment-caddy.md).
 
 ```bash
 # Server health
-curl http://localhost:9090/health
+curl http://localhost:64730/health
 
 # Virtual servers
-curl http://localhost:9090/api/v1/servers
+curl http://localhost:64730/api/v1/servers
 
 # Channel tree
-curl http://localhost:9090/api/v1/servers/1/channels
+curl http://localhost:64730/api/v1/servers/1/channels
 
 # Connected users (includes session_id, user_id, name, channel_id, mute state, is_admin)
-curl http://localhost:9090/api/v1/servers/1/users
+curl http://localhost:64730/api/v1/servers/1/users
 
 # Server configuration
-curl http://localhost:9090/api/v1/servers/1/config
+curl http://localhost:64730/api/v1/servers/1/config
 
 # Global (meta) configuration
-curl http://localhost:9090/api/v1/meta/config
+curl http://localhost:64730/api/v1/meta/config
 
 # Channel ACLs
-curl http://localhost:9090/api/v1/servers/1/channels/0/acl
+curl http://localhost:64730/api/v1/servers/1/channels/0/acl
 
 # Bans
-curl http://localhost:9090/api/v1/servers/1/bans
+curl http://localhost:64730/api/v1/servers/1/bans
 
 # Registered users
-curl http://localhost:9090/api/v1/servers/1/registered-users
+curl http://localhost:64730/api/v1/servers/1/registered-users
 ```
 
 ## Using the Protocol Library
@@ -241,12 +260,12 @@ go run ./cmd/go-mumble-server -frontend-embed=false
 cd frontend && yarn dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000). The Vite dev server proxies `/api`, `/docs`, and `/health` to the Go server at `http://localhost:9090`.
+Open [http://localhost:3000](http://localhost:3000). The Vite dev server proxies `/api`, `/docs`, and `/health` to the Go server at `http://localhost:64730`.
 
 To use a different backend URL:
 
 ```bash
-VITE_API_PROXY_TARGET=http://localhost:9090 yarn dev
+VITE_API_PROXY_TARGET=http://localhost:64730 yarn dev
 ```
 
 ## Project Structure
@@ -319,6 +338,7 @@ go-mumble-server/
 
 - [Product Overview](docs/product-overview.md) — Project vision and feature summary
 - [Technical Overview](docs/technical-overview.md) — Architecture, subsystems, and design decisions
+- [Deployment with Caddy](docs/deployment-caddy.md) — Reverse proxy setup (recommended for production)
 
 ### Protocol
 

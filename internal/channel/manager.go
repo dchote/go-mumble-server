@@ -118,7 +118,6 @@ func (m *Manager) fixRootID(rows []models.Channel) []models.Channel {
 	}
 
 	oldID := rows[rootIdx].ID
-	newID := uint(0)
 
 	// Use raw SQL: SQLite doesn't allow PK updates through GORM easily.
 	tx := m.db.Begin()
@@ -140,7 +139,6 @@ func (m *Manager) fixRootID(rows []models.Channel) []models.Channel {
 	if err := m.db.Where("server_id = ?", m.serverID).Order("position, id").Find(&fixed).Error; err != nil {
 		return rows
 	}
-	_ = newID // suppress unused
 	return fixed
 }
 

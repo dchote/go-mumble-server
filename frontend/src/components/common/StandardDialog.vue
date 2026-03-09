@@ -92,7 +92,7 @@ defineProps({
   },
   contentPadding: {
     type: String,
-    default: 'pa-4',
+    default: '',
   },
 })
 

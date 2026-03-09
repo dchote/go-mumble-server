@@ -17,8 +17,8 @@ func TestLoad_Defaults(t *testing.T) {
 	if cfg.MumblePort != 64738 {
 		t.Errorf("MumblePort = %d, want 64738", cfg.MumblePort)
 	}
-	if cfg.RESTPort != 9090 {
-		t.Errorf("RESTPort = %d, want 9090", cfg.RESTPort)
+	if cfg.RESTPort != 64730 {
+		t.Errorf("RESTPort = %d, want 64730", cfg.RESTPort)
 	}
 	if cfg.DatabasePath != "mumble-server.sqlite" {
 		t.Errorf("DatabasePath = %q, want mumble-server.sqlite", cfg.DatabasePath)

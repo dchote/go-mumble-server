@@ -114,6 +114,11 @@ func (s *Server) Start(ctx context.Context) error {
 			ms.ACLEvaluator().InvalidateCache()
 		}
 	}
+	onBanChange := func(serverID uint) {
+		if serverID == 1 {
+			ms.BanManager().Reload()
+		}
+	}
 	onChannelMutated := func(serverID uint, ch interface{}, channelID uint32, removed bool) {
 		if serverID != 1 {
 			return
@@ -124,7 +129,7 @@ func (s *Server) Start(ctx context.Context) error {
 			ms.BroadcastChannelState(c)
 		}
 	}
-	handler := rest.RouterWithMumble(s.db, cfg, s.feFS, &rest.MumbleUserAdapter{Manager: ms.UserManager()}, getChanMgr, onACLChange, onChannelMutated)
+	handler := rest.RouterWithMumble(s.db, cfg, s.feFS, &rest.MumbleUserAdapter{Manager: ms.UserManager()}, &rest.MumbleUserActionAdapter{Server: ms, ServerID: 1}, getChanMgr, onACLChange, onBanChange, onChannelMutated)
 	s.http = &http.Server{
 		Addr:    restAddr,
 		Handler: handler,

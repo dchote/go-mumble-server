@@ -1,13 +1,11 @@
 <template>
   <v-app>
-    <transition name="layout-fade" mode="out-in">
-      <AuthenticatedLayout v-if="isAuthenticated" key="authenticated">
-        <router-view />
-      </AuthenticatedLayout>
-      <DefaultLayout v-else key="default">
-        <router-view />
-      </DefaultLayout>
-    </transition>
+    <AuthenticatedLayout v-if="isAuthenticated" key="authenticated">
+      <router-view />
+    </AuthenticatedLayout>
+    <DefaultLayout v-else key="default">
+      <router-view />
+    </DefaultLayout>
   </v-app>
 </template>
 
