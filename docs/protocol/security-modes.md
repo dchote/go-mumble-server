@@ -117,6 +117,32 @@ Field 6 (`CryptoModes`) is a varint bitmask:
 
 Standard clients omit this field; the server treats absence as legacy-only.
 
+## Mixed-Mode Channels
+
+When clients using different crypto modes share the same channel (e.g. a lite ESP32 and legacy desktop clients), the server enforces **TCP tunnel relay** for all audio in that channel:
+
+1. **Per-channel tracking** — The server maintains the active crypto mode set for each channel. When a user joins, leaves, or moves channels, the mode set is recomputed.
+
+2. **UDP ping suppression** — When a channel has mixed modes, the server does not echo UDP pings for clients in that channel. Clients that do not receive a ping echo fall back to TCP tunnel (UDPTunnel) automatically per the Mumble protocol.
+
+3. **Forced TCP relay** — Audio destined for recipients in mixed-mode channels is always sent via TCP tunnel (wrapped in the TLS-encrypted control connection) rather than UDP. This ensures each client's security level is maintained without risk of cross-mode packet misinterpretation.
+
+4. **Re-enabling UDP** — When a channel returns to a homogeneous mode (e.g. the lite client leaves), the server resumes echoing UDP pings and sending audio via UDP.
+
+5. **Linked channels** — The mixed-mode check extends to linked channel groups. If channel A (all legacy) is linked to channel B (one lite client), audio routed across the link also uses TCP tunnel.
+
+The channel's aggregate mode is visible in the REST API (`crypto_mode` field on channel nodes) and the web management UI.
+
+## UDP Sender Identification
+
+The server identifies UDP packet senders using a two-tier strategy:
+
+1. **Address cache** — After a client's first UDP packet is identified, the server caches a mapping from the UDP source address to the client's session ID. Subsequent packets from the same address are decrypted using the client's known CryptState (negotiated over TLS) without trial decryption.
+
+2. **Trial decryption fallback** — For unmapped addresses (first packet from a new client), the server tries decryption in priority order: secure, legacy, lite. This identifies the sender and populates the address cache.
+
+3. **NAT rebinding** — If a cached address lookup's decryption fails (source port changed due to NAT), the cache entry is cleared and the server falls back to trial decryption, then re-caches the new address.
+
 ## Reference
 
 - OCB2 vulnerability: [Cryptanalysis of OCB2](https://eprint.iacr.org/2019/311) (CRYPTO 2019)

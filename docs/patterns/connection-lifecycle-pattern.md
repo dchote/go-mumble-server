@@ -29,8 +29,7 @@ Each Mumble connection progresses through a well-defined sequence of states from
       ▼
 ┌───────────┐
 │   CRYPT   │  Server sends CryptSetup (AEAD key + nonces)
-│           │  Legacy: 16-byte key (AES-128)
-│           │  Secure: 32-byte key (AES-256)
+│           │  Legacy: 16-byte key (AES-128), Lite: no key, Secure: 32-byte (AES-256)
 └─────┬─────┘
       │
       ▼

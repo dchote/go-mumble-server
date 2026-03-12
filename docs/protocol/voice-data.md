@@ -14,7 +14,7 @@ Voice data travels over UDP (encrypted with an AEAD cipher) or is tunneled over 
 - Encrypted with AEAD cipher — OCB2-AES128 (legacy), AES-256-GCM (secure), or cleartext (lite). Each client has a unique key and nonce pair (or none for lite).
 - Maximum packet size: 1024 bytes.
 - Preferred transport for low latency.
-- **UDP ping (codec type 1):** Clients send encrypted pings to test connectivity; the server echoes them back. Without this echo, clients assume UDP is unavailable and fall back to TCP tunneling.
+- **UDP ping (codec type 1):** Clients send pings (encrypted in legacy/secure, cleartext in lite) to test connectivity; the server echoes them back unless the channel has mixed crypto modes (then the server suppresses the echo to force TCP). Without the echo, clients assume UDP is unavailable and fall back to TCP tunneling.
 - Encryption overhead: 0 bytes (lite), 4 bytes (legacy), or 28 bytes (secure). See [encryption.md](encryption.md).
 
 ### TCP Tunnel (UDPTunnel)
@@ -23,7 +23,7 @@ Voice data travels over UDP (encrypted with an AEAD cipher) or is tunneled over 
 - Message type 1 in the TCP framing — the payload is the raw (decrypted) audio packet.
 - Higher latency due to TCP head-of-line blocking.
 - Clients auto-detect UDP availability and fall back to TCP.
-- The server forwards voice to recipients via either UDP or TCP tunnel, depending on whether the recipient has established UDP connectivity (has sent at least one UDP packet).
+- The server forwards voice to recipients via either UDP or TCP tunnel, depending on whether the recipient has established UDP connectivity (has sent at least one UDP packet) and whether the recipient's channel has mixed crypto modes (mixed-mode channels always use TCP tunnel).
 
 ## Legacy Binary Format
 
@@ -168,8 +168,9 @@ The server does **not** decode or transcode audio. It inspects only the header t
 For each recipient, the server:
 
 1. Adds the sender's session ID (for server→client format).
-2. Encrypts with the recipient's AEAD key — OCB2-AES128 (legacy) or AES-256-GCM (secure) — for UDP delivery.
-3. Or wraps in a `UDPTunnel` TCP frame (for TCP fallback recipients).
+2. If the recipient's channel has mixed crypto modes, always uses TCP tunnel (no UDP).
+3. Otherwise, encrypts with the recipient's key — OCB2-AES128 (legacy), AES-256-GCM (secure), or cleartext (lite) — and sends via UDP if the recipient has a known UDP address.
+4. Or wraps in a `UDPTunnel` TCP frame when UDP is unavailable or mixed-mode forces relay.
 
 ## Bandwidth Enforcement
 

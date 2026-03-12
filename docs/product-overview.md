@@ -46,13 +46,15 @@ The server is built on top of the protocol library and adds:
 
 go-mumble-server negotiates security **per client** during the Version exchange. Three tiers are supported:
 
-- **Legacy** (default) — 100% backward compatible with all existing Mumble clients. OCB2-AES128 for UDP voice, TLS 1.2+.
+- **Legacy** (default) — 100% backward compatible with all existing Mumble clients. OCB2-AES128 for UDP voice, TLS 1.2+. This is the default mode for any client that does not advertise crypto capabilities.
 
 - **Secure** — Modern cryptography for clients that support it. AES-256-GCM for UDP voice, TLS 1.3, mandatory client certificates. Clients advertise this capability; the server upgrades when both support it.
 
 - **Lite** — No UDP encryption (cleartext voice) for constrained devices (e.g. ESP32) on trusted networks. Control channel remains TLS-encrypted.
 
 Standard Mumble clients omit capability negotiation and default to legacy. Mixed client populations are supported: a desktop client may use legacy while a secure-aware client uses secure on the same server.
+
+**Mixed-mode channel enforcement** — When clients with different crypto modes share a channel, the server forces all audio in that channel through TCP tunnel relay (UDPTunnel over the TLS-encrypted control connection). This ensures each client's security level is maintained correctly. When the channel returns to a single mode, UDP transport is re-enabled automatically.
 
 **Password storage** — Management UI (API) user passwords are hashed with bcrypt. Mumble registered-user passwords are stored as Argon2id hashes. SQLite storage is not encrypted at rest in the current implementation; rely on filesystem or deployment-level encryption if required.
 
@@ -70,7 +72,7 @@ go-mumble-server implements the complete Mumble server feature set:
 - **Whisper / voice targets** — Directed audio to specific users, channels, or ACL groups.
 - **Channel listeners** — Users can listen to channels without joining them.
 - **Server configuration** — Bandwidth limits, rate limiting, user limits, channel constraints, and welcome messages.
-- **Encryption** — TLS for control, AEAD cipher for voice (OCB2-AES128 legacy / AES-256-GCM secure).
+- **Encryption** — TLS for control; UDP voice uses AEAD (OCB2-AES128 legacy, AES-256-GCM secure) or cleartext (lite) per client.
 - **Virtual servers** — Multiple logical servers within a single process.
 
 ## Web Management UI

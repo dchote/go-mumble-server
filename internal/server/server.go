@@ -128,7 +128,7 @@ func (s *Server) Start(ctx context.Context) error {
 			ms.BroadcastChannelState(c)
 		}
 	}
-	handler := rest.RouterWithMumble(s.db, cfg, s.feFS, &rest.MumbleUserAdapter{Manager: ms.UserManager()}, &rest.MumbleUserActionAdapter{Server: ms, ServerID: 1}, getChanMgr, onACLChange, onBanChange, onChannelMutated)
+	handler := rest.RouterWithMumble(s.db, cfg, s.feFS, &rest.MumbleUserAdapter{Manager: ms.UserManager()}, &rest.MumbleUserActionAdapter{Server: ms, ServerID: 1}, &rest.MumbleChannelCryptoAdapter{Server: ms, ServerID: 1}, getChanMgr, onACLChange, onBanChange, onChannelMutated)
 	s.http = &http.Server{
 		Addr:    restAddr,
 		Handler: handler,
@@ -194,6 +194,9 @@ func (s *Server) acceptLoop(ctx context.Context, ln net.Listener, ms *mumble.Ser
 			name := c.UserName()
 			u := ms.UserManager().Remove(sid)
 			ms.UnregisterConn(sid)
+			if u != nil && u.ChannelID != 0 {
+				ms.UpdateChannelCrypto(u.ChannelID)
+			}
 			ms.Broadcast(sid, protocol.MessageUserRemove, &messages.UserRemove{Session: sid, Actor: 0})
 			if name != "" || u != nil {
 				n := name

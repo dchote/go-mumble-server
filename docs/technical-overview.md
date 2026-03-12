@@ -11,7 +11,7 @@ go-mumble-server is a native Go implementation of the Mumble voice chat server, 
 | Language | Go 1.25+ |
 | Protocol serialization | Native Go structs with hand-written wire encoding (no protobuf) |
 | Audio codec | Opus (primary), CELT (compatibility) |
-| UDP encryption | OCB2-AES128 (legacy mode) / AES-256-GCM (secure mode) |
+| UDP encryption | OCB2-AES128 (legacy), AES-256-GCM (secure), or cleartext (lite); mixed-mode channels force TCP relay |
 | TLS | Go standard library `crypto/tls` |
 | Database | SQLite (via CGo or pure-Go driver) |
 | REST API | Go standard library `net/http` with router |
@@ -114,7 +114,7 @@ go-mumble-server binds three network interfaces:
 
 1. **Mumble TCP/TLS** (default `:64738`) — Control channel for Mumble protocol messages (native Go encoding). Handles connection setup, authentication, channel/user state synchronization, text messaging, and ACL management.
 
-2. **Mumble UDP** (default `:64738`) — Voice data channel. AEAD-encrypted audio packets (OCB2-AES128 in legacy mode, AES-256-GCM in secure mode). Same port as TCP per Mumble protocol convention. The server echoes UDP pings so clients can confirm connectivity before using UDP for voice.
+2. **Mumble UDP** (default `:64738`) — Voice data channel. Audio is AEAD-encrypted (OCB2-AES128 legacy, AES-256-GCM secure) or cleartext (lite). Same port as TCP per Mumble protocol convention. The server echoes UDP pings so clients can confirm connectivity, except in mixed-mode channels where the echo is suppressed to force TCP relay.
 
 3. **REST API + Web UI** (default `:64730`) — HTTP management interface with Swagger docs at `/docs` and an embedded Vue 3 + Vuetify management frontend. Used for administration, monitoring, and integration.
 
@@ -145,7 +145,7 @@ go-mumble-server/
 │       ├── protocol/messages/   # Native Go message structs (no protobuf)
 │       ├── protocol/            # Packet framing, message type IDs, handler table, wire encoding
 │       ├── protocol/wire/       # Hand-written Mumble-compatible wire encoder
-│       ├── crypto/              # CryptState: OCB2-AES128 (legacy) + AES-256-GCM (secure)
+│       ├── crypto/              # CryptState: lite (cleartext), OCB2-AES128 (legacy), AES-256-GCM (secure)
 │       ├── audio/               # Audio packet parsing, varint codec, codec IDs
 │       ├── channel.go           # Channel type definition
 │       ├── user.go              # User type definition
@@ -230,11 +230,13 @@ See [protocol/control-messages.md](protocol/control-messages.md) for the full me
 
 The audio subsystem handles:
 
-- **UDP ping echo** — Clients send encrypted UDP pings (codec type 1) to test connectivity. The server echoes them back; without this, clients assume UDP is blocked and fall back to TCP tunneling.
-- **Decryption** — AEAD decryption of incoming UDP packets using per-client `CryptState` (OCB2-AES128 in legacy mode, AES-256-GCM in secure mode).
+- **UDP sender identification** — Incoming UDP packets are mapped to client sessions using an address-based cache (populated after the first packet from each client). The cached session's TLS-negotiated `CryptState` is used for decryption directly, avoiding trial decryption on every packet. On cache miss (first packet or NAT rebinding), the server falls back to trial decryption in priority order: secure, legacy, lite.
+- **UDP ping echo** — Clients send UDP pings (codec type 1; encrypted in legacy/secure, cleartext in lite) to test connectivity. The server echoes them back; without this, clients assume UDP is blocked and fall back to TCP tunneling. Pings are **suppressed** for clients in mixed-mode channels to force TCP tunnel fallback.
+- **Decryption** — AEAD decryption of incoming UDP packets using per-client `CryptState` (OCB2-AES128 in legacy mode, AES-256-GCM in secure mode, cleartext in lite mode).
 - **Packet rewriting** — Client→server packets omit the sender's session ID; server→client packets must include it. The server inserts the sender session ID (varint) between the header and the rest of the payload before forwarding.
 - **Routing** — Determines recipients based on voice target (normal talk, whisper, server loopback).
-- **Forwarding** — Sends audio to recipients via UDP (if the recipient has sent at least one UDP packet) or TCP tunnel (fallback via `UDPTunnel` message).
+- **Forwarding** — Sends audio to recipients via UDP (if the recipient has sent at least one UDP packet and their channel is not in mixed crypto mode) or TCP tunnel (fallback via `UDPTunnel` message).
+- **Mixed-mode enforcement** — The server tracks the active crypto modes per channel. When a channel has clients using different modes, all audio in that channel is forced through TCP tunnel to ensure correct encryption handling.
 
 Audio is **not decoded on the server** — packets are forwarded as opaque Opus/CELT frames. The server only inspects the header to determine routing.
 
@@ -273,15 +275,17 @@ Permissions are evaluated as a bitmask. See [patterns/acl-evaluation-pattern.md]
 
 ### Crypto (CryptState)
 
-Each client connection maintains a `CryptState` for UDP encryption. The algorithm is [negotiated per client](protocol/security-modes.md):
+Each client connection maintains a `CryptState` for UDP encryption. The algorithm is [negotiated per client](protocol/security-modes.md) during the TLS-based Version/CryptSetup exchange:
 
-- **Legacy mode** — OCB2-AES128. 128-bit key, 3-byte auth tag, single-byte nonce increment. Matches original Mumble.
+- **Legacy mode** (default) — OCB2-AES128. 128-bit key, 3-byte auth tag, single-byte nonce increment. Matches original Mumble. Used by all standard clients that do not advertise crypto capabilities.
 - **Secure mode** — AES-256-GCM. 256-bit key, 16-byte auth tag, 12-byte explicit nonce. Modern NIST-standard AEAD.
+- **Lite mode** — No UDP encryption (cleartext). For constrained devices on trusted networks.
 
-Both modes:
-- **Key exchange** — Key + nonces sent via `CryptSetup` over TLS (field sizes vary by mode).
-- **Replay protection** — Sliding window to detect replayed or reordered packets.
+All modes:
+- **Key exchange** — Key + nonces sent via `CryptSetup` over TLS (field sizes vary by mode; empty for lite).
+- **Replay protection** — Sliding window to detect replayed or reordered packets (legacy and secure modes).
 - **Late/lost tracking** — Statistics for packet loss and late arrivals.
+- **Per-channel enforcement** — The server tracks crypto modes per channel and forces TCP tunnel relay when mixed modes are present, ensuring correct security handling for all clients.
 
 See [protocol/encryption.md](protocol/encryption.md) and [protocol/security-modes.md](protocol/security-modes.md).
 
@@ -425,7 +429,7 @@ On first start, the TOML/env/flag values seed both tables. Subsequent changes ar
 
 - [Control Messages](protocol/control-messages.md) — TCP message catalog (types 0–26)
 - [Voice Data](protocol/voice-data.md) — UDP audio packet format and routing
-- [Security Modes](protocol/security-modes.md) — Per-client negotiated crypto tiers
+- [Security Modes](protocol/security-modes.md) — Per-client negotiated crypto tiers and mixed-mode enforcement
 - [Encryption](protocol/encryption.md) — TLS, AEAD ciphers, password hashing
 - [Permissions](protocol/permissions.md) — Permission bitmask definitions
 

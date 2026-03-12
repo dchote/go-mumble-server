@@ -21,7 +21,7 @@ Removed the server-level security-mode configuration and replaced it with per-cl
 - Added `CryptoModes` field (field 6) to Version message for capability negotiation
 - Added `ModeLite` to CryptState (no-op encrypt/decrypt, zero overhead)
 - `negotiateCryptoMode` selects best tier based on client capabilities and TLS state
-- HandleUDP tries decryption in order: secure, legacy, lite (to correctly identify senders)
+- UDP sender identification: address cache first (after first packet), then trial decryption in order secure, legacy, lite for unmapped addresses
 
 ## Compatibility
 

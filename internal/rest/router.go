@@ -47,11 +47,11 @@ type OnACLChange func(serverID uint)
 type OnBanChange func(serverID uint)
 
 // RouterWithMumble sets up the REST API with optional Mumble connected-user listing.
-func RouterWithMumble(db *gorm.DB, cfg *config.Config, feFS fs.FS, userLister handler.ConnectedUserLister, userActioner handler.ConnectedUserActioner, getChanMgr GetChannelManager, onACLChange OnACLChange, onBanChange OnBanChange, onChannelMutated handler.OnChannelMutated) http.Handler {
+func RouterWithMumble(db *gorm.DB, cfg *config.Config, feFS fs.FS, userLister handler.ConnectedUserLister, userActioner handler.ConnectedUserActioner, channelCrypto handler.ChannelCryptoLister, getChanMgr GetChannelManager, onACLChange OnACLChange, onBanChange OnBanChange, onChannelMutated handler.OnChannelMutated) http.Handler {
 	userSvc := service.NewUserService(db, cfg)
 	authHandler := handler.NewAuthHandler(userSvc, db, cfg)
 	userHandler := handler.NewUserHandler(userSvc)
-	serverHandler := handler.NewServerHandler(db, cfg, userLister, userActioner, (func(serverID uint) *channel.Manager)(getChanMgr), onChannelMutated)
+	serverHandler := handler.NewServerHandler(db, cfg, userLister, userActioner, channelCrypto, (func(serverID uint) *channel.Manager)(getChanMgr), onChannelMutated)
 	banHandler := handler.NewBanHandler(db, (handler.OnBanChange)(onBanChange))
 	aclHandler := handler.NewACLHandler(db, onACLChange)
 	regUserHandler := handler.NewRegisteredUserHandler(db)

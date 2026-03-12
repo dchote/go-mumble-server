@@ -33,12 +33,18 @@ type ConnectedUserActioner interface {
 	BanAndKick(serverID uint, sessionID uint32, reason string) (ok bool)
 }
 
+// ChannelCryptoLister returns per-channel crypto mode strings for a virtual server.
+type ChannelCryptoLister interface {
+	ChannelCryptoModes(serverID uint) map[uint32]string
+}
+
 // ServerHandler handles server and channel REST endpoints.
 type ServerHandler struct {
 	db               *gorm.DB
 	cfg              *config.Config
 	connectedUsers   ConnectedUserLister
 	userActioner     ConnectedUserActioner
+	channelCrypto    ChannelCryptoLister
 	getChanMgr       func(serverID uint) *channel.Manager
 	onChannelMutated OnChannelMutated
 	metaHost         string
@@ -46,13 +52,13 @@ type ServerHandler struct {
 }
 
 // NewServerHandler creates a ServerHandler.
-func NewServerHandler(db *gorm.DB, cfg *config.Config, connectedUsers ConnectedUserLister, userActioner ConnectedUserActioner, getChanMgr func(serverID uint) *channel.Manager, onChannelMutated OnChannelMutated) *ServerHandler {
+func NewServerHandler(db *gorm.DB, cfg *config.Config, connectedUsers ConnectedUserLister, userActioner ConnectedUserActioner, channelCrypto ChannelCryptoLister, getChanMgr func(serverID uint) *channel.Manager, onChannelMutated OnChannelMutated) *ServerHandler {
 	meta, _ := config.LoadMetaConfig(db)
 	host, port := "0.0.0.0", 64738
 	if meta != nil {
 		host, port = meta.Host, meta.MumblePort
 	}
-	return &ServerHandler{db: db, cfg: cfg, connectedUsers: connectedUsers, userActioner: userActioner, getChanMgr: getChanMgr, onChannelMutated: onChannelMutated, metaHost: host, metaMumblePort: port}
+	return &ServerHandler{db: db, cfg: cfg, connectedUsers: connectedUsers, userActioner: userActioner, channelCrypto: channelCrypto, getChanMgr: getChanMgr, onChannelMutated: onChannelMutated, metaHost: host, metaMumblePort: port}
 }
 
 // List returns all virtual servers. Seeds a default server if none exist.
@@ -405,7 +411,14 @@ func (h *ServerHandler) GetChannels(w http.ResponseWriter, r *http.Request) {
 			channels = append(channels, root)
 		}
 	}
-	tree := buildChannelTree(channels, nil)
+	var cryptoModes map[uint32]string
+	if h.channelCrypto != nil {
+		cryptoModes = h.channelCrypto.ChannelCryptoModes(uint(id))
+	}
+	if cryptoModes == nil {
+		cryptoModes = make(map[uint32]string)
+	}
+	tree := buildChannelTree(channels, nil, cryptoModes)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(tree)
 }
@@ -553,10 +566,11 @@ type ChannelNode struct {
 	Position    int32         `json:"position"`
 	MaxUsers    uint32        `json:"max_users"`
 	IsTemporary bool          `json:"is_temporary"`
+	CryptoMode  string        `json:"crypto_mode,omitempty"`
 	Children    []ChannelNode `json:"children,omitempty"`
 }
 
-func buildChannelTree(channels []models.Channel, parentID *uint) []ChannelNode {
+func buildChannelTree(channels []models.Channel, parentID *uint, cryptoModes map[uint32]string) []ChannelNode {
 	var out []ChannelNode
 	for _, c := range channels {
 		if (parentID == nil && c.ParentID == nil) || (parentID != nil && c.ParentID != nil && *c.ParentID == *parentID) {
@@ -569,7 +583,8 @@ func buildChannelTree(channels []models.Channel, parentID *uint) []ChannelNode {
 				Position:    c.Position,
 				MaxUsers:    c.MaxUsers,
 				IsTemporary: c.IsTemporary,
-				Children:    buildChannelTree(channels, ptr(c.ID)),
+				CryptoMode:  cryptoModes[uint32(c.ID)],
+				Children:    buildChannelTree(channels, ptr(c.ID), cryptoModes),
 			}
 			out = append(out, n)
 		}

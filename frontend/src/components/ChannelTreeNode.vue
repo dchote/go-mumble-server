@@ -7,12 +7,22 @@
       density="compact"
       @click="onRowClick"
     >
-      <template v-if="serverId && canManageUsers" #append>
+      <template #append>
         <div class="d-flex align-center" @click.stop>
+          <v-chip
+            v-if="channel.crypto_mode"
+            size="x-small"
+            variant="tonal"
+            density="compact"
+            :color="cryptoModeColor"
+            class="mr-2"
+          >
+            {{ channel.crypto_mode }}
+          </v-chip>
           <v-chip v-if="channelUsers.length > 0" size="x-small" variant="tonal" density="compact" class="mr-2">
             {{ channelUsers.length }}
           </v-chip>
-          <v-menu location="bottom end">
+          <v-menu v-if="serverId && canManageUsers" location="bottom end">
             <template #activator="{ props: menuProps }">
               <v-btn icon="mdi-dots-vertical" variant="text" size="x-small" v-bind="menuProps" />
             </template>
@@ -176,6 +186,11 @@ const channelUsers = computed(() => {
   if (!props.users?.length) return []
   const cid = typeof props.channel.id === 'string' ? parseInt(props.channel.id, 10) : props.channel.id
   return props.users.filter((u) => (u.channel_id ?? u.channelId) === cid)
+})
+
+const cryptoModeColor = computed(() => {
+  const colors = { legacy: 'secondary', lite: 'info', secure: 'success', mixed: 'warning' }
+  return colors[props.channel.crypto_mode] || 'secondary'
 })
 
 function onUserAction(u, action) {

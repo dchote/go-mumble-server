@@ -8,7 +8,7 @@ go-mumble-server uses layered encryption; the UDP cipher is [negotiated per clie
 
 1. **TLS** for the TCP control channel — TLS 1.2+ (permissive; client may negotiate 1.2 or 1.3).
 2. **AEAD cipher** for UDP voice — OCB2-AES128 (legacy), AES-256-GCM (secure), or none (lite).
-3. **Local storage encryption** — AES-256 encrypted database regardless of mode.
+3. **Password hashing** — Argon2id for Mumble registered users; bcrypt for API users. SQLite storage is not encrypted at rest; use filesystem or deployment-level encryption if required.
 
 See [security-modes.md](security-modes.md) for the negotiated tiers and rationale.
 
@@ -222,16 +222,9 @@ Passwords are **always** stored as Argon2id hashes regardless of security mode:
 
 In legacy mode, the server performs the PBKDF2 check using the stored Argon2id hash as the canonical credential store.
 
-## Local Storage Encryption
+## Storage at Rest
 
-Regardless of protocol security mode:
-
-- **Database** encrypted at rest using AES-256 (SQLCipher or application-level encryption).
-- **Master key** stored in a separate file with restricted permissions (0600).
-- **Configuration secrets** support encrypted values or environment variable references.
-- **Key material** zeroed from memory after use (best-effort given Go's GC).
-
-See [security-modes.md](security-modes.md) for the full local storage encryption design.
+In the current implementation, the SQLite database is **not** encrypted at rest. Passwords are stored as one-way hashes (Argon2id for Mumble users, bcrypt for API users). For deployments that require encrypted storage, use filesystem-level or full-disk encryption, or host the data directory on an encrypted volume.
 
 ## Reference
 

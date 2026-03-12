@@ -24,8 +24,8 @@ The audio pipeline is the performance-critical path in a Mumble server. Audio pa
 │ Packet Type? │  Codec type from header (bits 7-5)
 └──────┬───────┘
        │
-       ├── Codec 1 (Ping) ──► Echo back to sender (UDP only)
-       │                      (confirms UDP connectivity)
+       ├── Codec 1 (Ping) ──► Echo back to sender (UDP only), unless channel
+       │                      has mixed crypto modes (then suppress to force TCP)
        │
        ▼
 ┌──────────────┐
@@ -46,8 +46,8 @@ The audio pipeline is the performance-critical path in a Mumble server. Audio pa
        │
        ▼ (for each recipient)
 ┌──────────────┐
-│   Forward    │  Re-encrypt for recipient (UDP if addr known)
-│              │  else wrap in UDPTunnel (TCP fallback)
+│   Forward    │  Re-encrypt for recipient (UDP if addr known and channel
+│              │  not mixed-mode); else wrap in UDPTunnel (TCP fallback)
 └──────────────┘
        │
        ▼

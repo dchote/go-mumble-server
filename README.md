@@ -13,7 +13,7 @@ go-mumble-server re-imagines the Mumble server with modern priorities: a single 
 **REST management API on :64730** — Administration and monitoring with Swagger docs at `/docs`.
 **Web management UI** — Vue 3 + Vuetify frontend embedded in the binary, served alongside the REST API.
 
-**Per-client security negotiation** — Legacy (default), secure, or lite. Standard Mumble clients use legacy automatically; secure-aware clients upgrade when possible. Local storage is always encrypted.
+**Per-client security negotiation** — Legacy (default), secure, or lite. Standard Mumble clients use legacy automatically; secure-aware clients upgrade when possible. Mixed-mode channels (e.g. legacy and lite clients together) are automatically relayed through TCP tunnel to maintain correct encryption for each client.
 
 ### Screenshots
 
@@ -45,8 +45,8 @@ go-mumble-server re-imagines the Mumble server with modern priorities: a single 
 - **Whisper / voice targets** — Directed audio to specific users, channels (including root), or groups
 - **User management** — Certificate-based identity, registration, and server passwords
 - **Virtual servers** — Multiple logical servers in a single process
-- **Negotiated security tiers** — Legacy (OCB2-AES128), Secure (AES-256-GCM), or Lite (cleartext UDP for constrained devices); per-client negotiation
-- **Encrypted storage** — AES-256 encrypted database at rest, Argon2id password hashes, regardless of protocol mode
+- **Negotiated security tiers** — Legacy (OCB2-AES128, default), Secure (AES-256-GCM), or Lite (cleartext UDP for constrained devices); per-client negotiation via TLS. Mixed-mode channels force TCP tunnel relay.
+- **Password security** — Argon2id password hashes for registered users, bcrypt for API users
 - **REST API** — Server management, monitoring, and integration with Swagger UI at `/docs`
 - **Web management UI** — Vue 3 + Vuetify frontend embedded in the server binary
 - **SQLite storage** — Zero-config persistence for users, channels, ACLs, and bans
@@ -340,8 +340,8 @@ go-mumble-server/
 
 - [Control Messages](docs/protocol/control-messages.md) — TCP message catalog (types 0–26)
 - [Voice Data](docs/protocol/voice-data.md) — UDP audio packet format and routing
-- [Security Modes](docs/protocol/security-modes.md) — Legacy vs secure mode design
-- [Encryption](docs/protocol/encryption.md) — TLS, AEAD ciphers, password hashing, storage encryption
+- [Security Modes](docs/protocol/security-modes.md) — Per-client crypto tiers (legacy, secure, lite) and mixed-mode enforcement
+- [Encryption](docs/protocol/encryption.md) — TLS, AEAD ciphers, password hashing
 - [Permissions](docs/protocol/permissions.md) — Permission bitmask definitions
 
 ### Frontend

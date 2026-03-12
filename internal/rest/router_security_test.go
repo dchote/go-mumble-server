@@ -29,7 +29,7 @@ func TestRouterRoleEnforcement(t *testing.T) {
 
 	adminToken := mustCreateAPIToken(t, db, cfg, "admin", models.RoleAdmin)
 	userToken := mustCreateAPIToken(t, db, cfg, "readonly", models.RoleUser)
-	handler := RouterWithMumble(db, cfg, nil, nil, nil, nil, nil, nil, nil)
+	handler := RouterWithMumble(db, cfg, nil, nil, nil, nil, nil, nil, nil, nil)
 
 	t.Run("non-admin can read server list", func(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, "/api/v1/servers", nil)
