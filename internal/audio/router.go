@@ -1,7 +1,9 @@
 package audio
 
 import (
+	"log/slog"
 	"sync"
+	"sync/atomic"
 )
 
 // RecipientSender sends an audio packet to a recipient.
@@ -18,6 +20,7 @@ type RouterConfig struct {
 	GetLinkedChans   func(channelID uint32) []uint32
 	FilterRecipient  func(senderSessionID, recipientSessionID uint32) bool
 	CanSenderSpeak   func(senderSessionID uint32) bool
+	VoiceDebug       bool
 }
 
 // Router forwards voice packets to appropriate recipients.
@@ -43,12 +46,31 @@ func NewRouterWithConfig(cfg RouterConfig) *Router {
 	return &Router{config: cfg}
 }
 
+// SetVoiceDebug updates the voice debug flag for runtime toggling.
+func (r *Router) SetVoiceDebug(enabled bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.config.VoiceDebug = enabled
+}
+
+var routeLogCount atomic.Uint64
+
 // Route determines recipients and forwards the decrypted packet.
 func (r *Router) Route(senderSessionID uint32, voiceTarget uint8, decryptedPacket []byte) error {
+	r.mu.RLock()
 	cfg := r.config
+	voiceDebug := cfg.VoiceDebug
+	r.mu.RUnlock()
 	if cfg.Sender == nil {
+		if voiceDebug {
+			slog.Warn("[VOICE-DEBUG] Route: no Sender configured")
+		}
 		return nil
 	}
+
+	n := routeLogCount.Add(1)
+	shouldLog := voiceDebug && (n <= 5 || n%50 == 0)
+
 	var recipients []uint32
 	switch voiceTarget {
 	case 31:
@@ -56,6 +78,10 @@ func (r *Router) Route(senderSessionID uint32, voiceTarget uint8, decryptedPacke
 	case 0:
 		if cfg.GetChan != nil && cfg.GetUsersInChan != nil {
 			if cfg.CanSenderSpeak != nil && !cfg.CanSenderSpeak(senderSessionID) {
+				if voiceDebug {
+					slog.Warn("[VOICE-DEBUG] Route: CanSenderSpeak=false, dropping",
+						"sender", senderSessionID)
+				}
 				return nil
 			}
 			ch := cfg.GetChan(senderSessionID)
@@ -65,20 +91,40 @@ func (r *Router) Route(senderSessionID uint32, voiceTarget uint8, decryptedPacke
 			}
 			seen := make(map[uint32]bool)
 			for _, cid := range channelIDs {
-				for _, sid := range cfg.GetUsersInChan(cid) {
+				usersInChan := cfg.GetUsersInChan(cid)
+				if shouldLog {
+					slog.Info("[VOICE-DEBUG] Route: channel scan",
+						"sender", senderSessionID, "channel", cid, "users_in_channel", usersInChan)
+				}
+				for _, sid := range usersInChan {
 					if sid != senderSessionID && !seen[sid] {
 						seen[sid] = true
-						if cfg.FilterRecipient == nil || cfg.FilterRecipient(senderSessionID, sid) {
+						filtered := false
+						if cfg.FilterRecipient != nil && !cfg.FilterRecipient(senderSessionID, sid) {
+							filtered = true
+						}
+						if !filtered {
 							recipients = append(recipients, sid)
+						} else if shouldLog {
+							slog.Info("[VOICE-DEBUG] Route: recipient filtered out",
+								"sender", senderSessionID, "recipient", sid)
 						}
 					}
 				}
 			}
+		} else if voiceDebug {
+			slog.Warn("[VOICE-DEBUG] Route: GetChan or GetUsersInChan is nil")
 		}
 	default:
 		if voiceTarget >= 1 && voiceTarget <= 30 && cfg.GetVoiceTarget != nil {
 			recipients = cfg.GetVoiceTarget(senderSessionID, voiceTarget)
 		}
+	}
+	if shouldLog || (voiceDebug && len(recipients) == 0) {
+		slog.Info("[VOICE-DEBUG] Route: forwarding",
+			"sender", senderSessionID, "target", voiceTarget,
+			"recipient_count", len(recipients), "recipients", recipients,
+			"pkt_len", len(decryptedPacket))
 	}
 	for _, sid := range recipients {
 		_ = cfg.Sender.SendAudio(sid, decryptedPacket)

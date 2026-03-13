@@ -121,7 +121,7 @@ A separate write goroutine (or buffered channel) serializes outbound messages to
 
 ### State Synchronization
 
-After authentication, the server sends the full world state via `sendSync` (CryptSetup, channels, users, ServerConfig, ServerSync). The connection is registered for UDP routing only after `sendSync` completes, so `HandleUDP` never sees a connection with uninitialized crypto state.
+After authentication, the server sends the full world state via `sendSync` (CryptSetup, channels, users, ServerConfig, ServerSync). The connection is registered for UDP routing immediately after `CryptSetup` is sent, before the rest of the sync, so `HandleUDP` can identify the sender when the client sends its first UDP packet (ping or voice) after receiving `CryptSetup`.
 
 1. All `ChannelState` messages (depth-first from root). `channel_id` is always emitted (root = 0); root omits the `parent` field (proto2 optional).
 2. All `UserState` messages for connected users. `session` and `channel_id` are always emitted (users in root have `channel_id` 0).

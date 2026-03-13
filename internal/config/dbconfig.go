@@ -29,6 +29,7 @@ type ServerConfigData struct {
 	CertRequired        bool
 	ChannelNestingLimit int
 	ChannelCountLimit   int
+	VoiceDebug          bool
 }
 
 // LoadMetaConfig loads meta_config from DB (row ID 1).
@@ -87,6 +88,7 @@ func LoadServerConfig(db *gorm.DB, serverID uint) (*ServerConfigData, error) {
 		CertRequired:        sc.CertRequired,
 		ChannelNestingLimit: sc.ChannelNestingLimit,
 		ChannelCountLimit:   sc.ChannelCountLimit,
+		VoiceDebug:          sc.VoiceDebug,
 	}, nil
 }
 
@@ -97,6 +99,7 @@ func DefaultServerConfig() *ServerConfigData {
 		MaxBandwidth:        72000,
 		ChannelNestingLimit: 10,
 		ChannelCountLimit:   1000,
+		VoiceDebug:          false,
 	}
 }
 
@@ -132,6 +135,7 @@ func ConfigForServer(meta *MetaConfig, server *ServerConfigData, bootstrap *Conf
 		CertRequired:   server.CertRequired,
 		ChannelDepth:   server.ChannelNestingLimit,
 		ChannelCount:   server.ChannelCountLimit,
+		VoiceDebug:     server.VoiceDebug,
 	}
 	if bootstrap != nil {
 		cfg.DatabasePath = bootstrap.DatabasePath
@@ -193,6 +197,7 @@ func EnsureServerConfig(db *gorm.DB, serverID uint, cfg *Config) error {
 		DefaultChannel:      cfg.DefaultChannel,
 		CertRequired:        cfg.CertRequired,
 		ServerPassword:      cfg.ServerPassword,
+		VoiceDebug:          cfg.VoiceDebug,
 	}
 	return db.Create(&sc).Error
 }

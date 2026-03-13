@@ -3,10 +3,13 @@ package mumble
 import (
 	"crypto/rand"
 	"crypto/tls"
+	"encoding/hex"
+	"fmt"
 	"log/slog"
 	"net"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/dchote/go-mumble-server/internal/acl"
@@ -44,6 +47,7 @@ type Server struct {
 	channelCrypto   map[uint32]string // channelID -> "legacy"|"lite"|"secure"|"mixed"|""
 	router          *audio.Router
 	udpConn         net.PacketConn
+	voiceDebug      atomic.Bool
 }
 
 type textRateState struct {
@@ -57,9 +61,11 @@ func (s *Server) HandleUDP(addr net.Addr, data []byte) {
 	if s.udpConn == nil {
 		return
 	}
+	voiceDebug := s.voiceDebug.Load()
 	plain := make([]byte, len(data)+256)
 	var senderSession uint32
 	var senderCrypt *crypto.CryptState
+	var fromCache bool
 
 	addrKey := addr.String()
 
@@ -74,8 +80,13 @@ func (s *Server) HandleUDP(addr net.Addr, data []byte) {
 				senderSession = sid
 				senderCrypt = c.Crypt
 				plain = plain[:len(data)-c.Crypt.Overhead()]
+				fromCache = true
 			} else {
 				// Cached address no longer valid (NAT rebinding); clear and fall through.
+				if voiceDebug {
+					slog.Info("[VOICE-DEBUG] HandleUDP: cache decrypt failed (NAT rebinding?), clearing",
+						"addr", addrKey, "cached_session", sid)
+				}
 				s.sessionByAddr.Delete(addrKey)
 			}
 		}
@@ -84,25 +95,70 @@ func (s *Server) HandleUDP(addr net.Addr, data []byte) {
 	// Fallback: trial decrypt for unmapped addresses (first packet from a new client).
 	if senderSession == 0 {
 		s.connMu.RLock()
+		var tryCount, connCount int
+		var lastErr error
+		connCount = len(s.conns)
 		for _, mode := range []crypto.Mode{crypto.ModeSecure, crypto.ModeLegacy, crypto.ModeLite} {
 			for sid, c := range s.conns {
 				if c.Crypt == nil || c.State() != connection.StateActive || c.Crypt.Mode() != mode {
 					continue
 				}
+				tryCount++
 				if err := c.Crypt.Decrypt(plain, data); err == nil {
 					senderSession = sid
 					senderCrypt = c.Crypt
 					plain = plain[:len(data)-c.Crypt.Overhead()]
 					goto found
+				} else {
+					lastErr = err
 				}
 			}
 		}
 	found:
 		s.connMu.RUnlock()
+
+		if senderSession == 0 && voiceDebug {
+			firstBytes := 16
+			if len(data) < firstBytes {
+				firstBytes = len(data)
+			}
+			errStr := ""
+			if lastErr != nil {
+				errStr = lastErr.Error()
+			}
+			// Down-level to Debug when another port from the same host is already mapped
+			// (e.g. Mumble client's probe port vs voice port) to reduce log noise.
+			downLevel := false
+			if host, _, err := net.SplitHostPort(addrKey); err == nil {
+				s.addrBySession.Range(func(_, v interface{}) bool {
+					if a, ok := v.(net.Addr); ok {
+						if h, _, e := net.SplitHostPort(a.String()); e == nil && h == host {
+							downLevel = true
+							return false // stop iteration
+						}
+					}
+					return true
+				})
+			}
+			args := []interface{}{
+				"addr", addrKey, "data_len", len(data),
+				"first_bytes", hex.EncodeToString(data[:firstBytes]),
+				"conn_count", connCount, "tries", tryCount, "last_err", errStr}
+			if downLevel {
+				slog.Debug("[VOICE-DEBUG] HandleUDP: trial decrypt failed, no matching session (same host, different port)", args...)
+			} else {
+				slog.Warn("[VOICE-DEBUG] HandleUDP: trial decrypt failed, no matching session", args...)
+			}
+		}
 	}
 
 	if senderSession == 0 {
 		return
+	}
+
+	if voiceDebug && !fromCache {
+		slog.Info("[VOICE-DEBUG] HandleUDP: session identified via trial-decrypt",
+			"addr", addrKey, "session", senderSession)
 	}
 
 	// Cache both directions of the address<->session mapping.
@@ -120,12 +176,20 @@ func (s *Server) HandleUDP(addr net.Addr, data []byte) {
 	// (this forces the client to fall back to TCP tunnel).
 	if codecType == 1 {
 		u, ok := s.users.GetUser(senderSession)
-		if ok && s.channelHasMixedCrypto(u.ChannelID) {
+		mixed := ok && s.channelHasMixedCrypto(u.ChannelID)
+		if mixed {
+			if voiceDebug {
+				slog.Info("[VOICE-DEBUG] HandleUDP: ping suppress (mixed_crypto channel)",
+					"session", senderSession, "channel", u.ChannelID)
+			}
 			return
 		}
 		enc := make([]byte, len(plain)+senderCrypt.Overhead())
 		if err := senderCrypt.Encrypt(enc, plain); err == nil {
 			s.udpConn.WriteTo(enc, addr)
+			if voiceDebug {
+				slog.Info("[VOICE-DEBUG] HandleUDP: ping echo sent", "session", senderSession, "addr", addrKey)
+			}
 		}
 		return
 	}
@@ -164,26 +228,55 @@ func (s *Server) SendAudio(sessionID uint32, packet []byte) error {
 	recipientAddr, _ := s.addrBySession.Load(sessionID)
 	s.connMu.RUnlock()
 	if !ok || c == nil {
+		if s.voiceDebug.Load() {
+			slog.Warn("[VOICE-DEBUG] SendAudio: recipient conn not found", "recipient", sessionID)
+		}
 		return nil
 	}
+
+	voiceDebug := s.voiceDebug.Load()
 
 	// Try UDP first if recipient has a known UDP address,
 	// but force TCP tunnel when the channel has mixed crypto modes.
 	if recipientAddr != nil && c.Crypt != nil && s.udpConn != nil {
 		u, uOk := s.users.GetUser(sessionID)
-		if !uOk || !s.channelHasMixedCrypto(u.ChannelID) {
+		mixed := uOk && s.channelHasMixedCrypto(u.ChannelID)
+		if !uOk || !mixed {
 			addr := recipientAddr.(net.Addr)
 			overhead := c.Crypt.Overhead()
 			enc := make([]byte, len(packet)+overhead)
-			if err := c.Crypt.Encrypt(enc, packet); err == nil {
-				_, err := s.udpConn.WriteTo(enc, addr)
-				return err
+			encErr := c.Crypt.Encrypt(enc, packet)
+			if encErr == nil {
+				_, writeErr := s.udpConn.WriteTo(enc, addr)
+				if voiceDebug {
+					slog.Info("[VOICE-DEBUG] SendAudio via UDP",
+						"recipient", sessionID, "addr", addr.String(),
+						"pkt_len", len(packet), "enc_len", len(enc), "err", writeErr)
+				}
+				return writeErr
 			}
+			if voiceDebug {
+				slog.Error("[VOICE-DEBUG] SendAudio encrypt failed", "recipient", sessionID, "err", encErr)
+			}
+		} else if voiceDebug {
+			slog.Info("[VOICE-DEBUG] SendAudio skipping UDP (mixed_crypto)",
+				"recipient", sessionID, "mixed", mixed)
 		}
+	} else if voiceDebug {
+		slog.Info("[VOICE-DEBUG] SendAudio no UDP path",
+			"recipient", sessionID,
+			"has_addr", recipientAddr != nil,
+			"has_crypt", c.Crypt != nil,
+			"has_udp_conn", s.udpConn != nil)
 	}
 
 	// TCP fallback: wrap as UDPTunnel message
-	return c.WriteRaw(protocol.MessageUDPTunnel, packet)
+	err := c.WriteRaw(protocol.MessageUDPTunnel, packet)
+	if voiceDebug {
+		slog.Info("[VOICE-DEBUG] SendAudio via TCP fallback",
+			"recipient", sessionID, "pkt_len", len(packet), "err", err)
+	}
+	return err
 }
 
 func (s *Server) canSenderSpeak(sessionID uint32) bool {
@@ -308,6 +401,8 @@ func NewServer(cfg *config.Config, db *gorm.DB, serverID uint, udpConn net.Packe
 		channelCrypto: make(map[uint32]string),
 		udpConn:       udpConn,
 	}
+	voiceDebug := cfg.VoiceDebug
+	s.voiceDebug.Store(voiceDebug)
 	s.router = audio.NewRouterWithConfig(audio.RouterConfig{
 		Sender: s,
 		GetChan: func(sid uint32) uint32 {
@@ -328,6 +423,7 @@ func NewServer(cfg *config.Config, db *gorm.DB, serverID uint, udpConn net.Packe
 		},
 		FilterRecipient: s.audioFilterRecipient,
 		CanSenderSpeak:  s.canSenderSpeak,
+		VoiceDebug:      voiceDebug,
 	})
 	s.registerHandlers()
 	return s
@@ -380,6 +476,22 @@ func (s *Server) ACLEvaluator() *acl.Evaluator {
 // BanManager returns the ban manager (for cache invalidation when bans change via REST).
 func (s *Server) BanManager() *ban.Manager {
 	return s.bans
+}
+
+// HasUDPAddress returns true if the session has sent at least one UDP packet (voice or ping),
+// indicating the client is using native UDP transport rather than TCP tunnel.
+func (s *Server) HasUDPAddress(sessionID uint32) bool {
+	_, ok := s.addrBySession.Load(sessionID)
+	return ok
+}
+
+// SetVoiceDebug enables or disables voice path debug logging (UDP, TCP tunnel, routing).
+// Callable at runtime when server config is updated via REST.
+func (s *Server) SetVoiceDebug(enabled bool) {
+	s.voiceDebug.Store(enabled)
+	if s.router != nil {
+		s.router.SetVoiceDebug(enabled)
+	}
 }
 
 // BroadcastChannelState broadcasts a channel's state to all connected clients.
@@ -616,7 +728,6 @@ func (s *Server) handleAuthenticate(msgType protocol.MessageType, payload []byte
 	c.SetUser(u.Name, u.UserID, u.ChannelID)
 	c.SetActive()
 	s.sendSync(c, u)
-	s.RegisterConn(u.SessionID, c)
 	s.UpdateChannelCrypto(u.ChannelID)
 	s.Broadcast(u.SessionID, protocol.MessageUserState, userToState(u))
 	slog.Info("Mumble client authenticated", "user", u.Name, "session", u.SessionID, "channel", u.ChannelID)
@@ -701,6 +812,9 @@ func (s *Server) sendSync(c *connection.Conn, u *mumble.User) {
 		ClientNonce: decNonce, // server's decrypt nonce = client's encrypt nonce
 		ServerNonce: encNonce, // server's encrypt nonce = client's decrypt nonce
 	})
+	// Register conn for UDP routing before rest of sync so HandleUDP can identify
+	// the sender when the client sends its first UDP packet (ping/voice) after CryptSetup.
+	s.RegisterConn(u.SessionID, c)
 	_ = c.WriteMessage(protocol.MessageCodecVersion, &messages.CodecVersion{Opus: true})
 	for _, ch := range s.chans.GetTree() {
 		cs := channelToState(ch)
@@ -1273,18 +1387,64 @@ func (s *Server) handleVoiceTarget(msgType protocol.MessageType, payload []byte,
 	return nil
 }
 
+var udpTunnelCount sync.Map // session -> *uint64
+
 func (s *Server) handleUDPTunnel(msgType protocol.MessageType, payload []byte, ctx interface{}) error {
 	c := ctx.(*connection.Conn)
-	if c.State() != connection.StateActive || s.router == nil {
+	state := c.State()
+	sid := c.SessionID()
+	voiceDebug := s.voiceDebug.Load()
+	if state != connection.StateActive || s.router == nil {
+		if voiceDebug {
+			slog.Warn("[VOICE-DEBUG] UDPTunnel DROPPED: inactive/no-router",
+				"session", sid, "state", state, "router_nil", s.router == nil, "payload_len", len(payload))
+		}
 		return nil
 	}
 	if len(payload) < 1 {
+		if voiceDebug {
+			slog.Warn("[VOICE-DEBUG] UDPTunnel DROPPED: empty payload", "session", sid)
+		}
 		return nil
 	}
+
+	// Rate-limit logging: first 5 packets, then every 50th (only when voice_debug enabled)
+	countPtr, _ := udpTunnelCount.LoadOrStore(sid, new(uint64))
+	count := countPtr.(*uint64)
+	*count++
+	shouldLog := voiceDebug && (*count <= 5 || *count%50 == 0)
+
+	codecType := (payload[0] >> 5) & 0x07
 	target := uint8(payload[0] & 0x1F)
-	sid := c.SessionID()
+	if shouldLog {
+		slog.Info("[VOICE-DEBUG] UDPTunnel received",
+			"session", sid, "pkt_num", *count, "payload_len", len(payload),
+			"header_byte", fmt.Sprintf("0x%02x", payload[0]),
+			"codec_type", codecType, "target", target,
+			"first_bytes", hex.EncodeToString(payload[:min(len(payload), 16)]))
+
+		canSpeak := s.canSenderSpeak(sid)
+		u, uOk := s.users.GetUser(sid)
+		if uOk {
+			slog.Info("[VOICE-DEBUG] sender info",
+				"session", sid, "user_id", u.UserID, "channel_id", u.ChannelID,
+				"mute", u.Mute, "self_mute", u.SelfMute, "can_speak", canSpeak)
+		} else {
+			slog.Warn("[VOICE-DEBUG] sender NOT FOUND in user manager", "session", sid)
+		}
+	}
+
 	outgoing := rewriteAudioPacket(sid, payload)
-	_ = s.router.Route(sid, target, outgoing)
+	if shouldLog {
+		slog.Info("[VOICE-DEBUG] rewritten packet",
+			"session", sid, "in_len", len(payload), "out_len", len(outgoing),
+			"out_first_bytes", hex.EncodeToString(outgoing[:min(len(outgoing), 20)]))
+	}
+
+	err := s.router.Route(sid, target, outgoing)
+	if err != nil && voiceDebug {
+		slog.Error("[VOICE-DEBUG] Route returned error", "session", sid, "err", err)
+	}
 	return nil
 }
 

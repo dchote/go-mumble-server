@@ -27,8 +27,9 @@ type ConnectedUser struct {
 	ChannelID       uint32  `json:"channel_id"`
 	Address         string  `json:"address"`
 	Ping            float32 `json:"ping"`
-	CertificateHash string  `json:"certificate_hash,omitempty"` // SHA-1 hex of client cert; empty if none
-	CryptoMode      string  `json:"crypto_mode,omitempty"`      // Negotiated UDP crypto tier: lite, legacy, secure
+	CertificateHash string  `json:"certificate_hash,omitempty"`   // SHA-1 hex of client cert; empty if none
+	CryptoMode      string  `json:"crypto_mode,omitempty"`        // Negotiated UDP crypto tier: lite, legacy, secure
+	VoiceTransport  string  `json:"voice_transport,omitempty"`    // udp or tcp — whether client uses native UDP or TCP tunnel for voice
 	SelfMute        bool    `json:"self_mute"`
 	SelfDeaf        bool    `json:"self_deaf"`
 	Mute            bool    `json:"mute"`
@@ -47,11 +48,11 @@ type OnACLChange func(serverID uint)
 type OnBanChange func(serverID uint)
 
 // RouterWithMumble sets up the REST API with optional Mumble connected-user listing.
-func RouterWithMumble(db *gorm.DB, cfg *config.Config, feFS fs.FS, userLister handler.ConnectedUserLister, userActioner handler.ConnectedUserActioner, channelCrypto handler.ChannelCryptoLister, getChanMgr GetChannelManager, onACLChange OnACLChange, onBanChange OnBanChange, onChannelMutated handler.OnChannelMutated) http.Handler {
+func RouterWithMumble(db *gorm.DB, cfg *config.Config, feFS fs.FS, userLister handler.ConnectedUserLister, userActioner handler.ConnectedUserActioner, channelCrypto handler.ChannelCryptoLister, getChanMgr GetChannelManager, onACLChange OnACLChange, onBanChange OnBanChange, onChannelMutated handler.OnChannelMutated, onConfigChange handler.OnConfigChange) http.Handler {
 	userSvc := service.NewUserService(db, cfg)
 	authHandler := handler.NewAuthHandler(userSvc, db, cfg)
 	userHandler := handler.NewUserHandler(userSvc)
-	serverHandler := handler.NewServerHandler(db, cfg, userLister, userActioner, channelCrypto, (func(serverID uint) *channel.Manager)(getChanMgr), onChannelMutated)
+	serverHandler := handler.NewServerHandler(db, cfg, userLister, userActioner, channelCrypto, (func(serverID uint) *channel.Manager)(getChanMgr), onChannelMutated, onConfigChange)
 	banHandler := handler.NewBanHandler(db, (handler.OnBanChange)(onBanChange))
 	aclHandler := handler.NewACLHandler(db, onACLChange)
 	regUserHandler := handler.NewRegisteredUserHandler(db)

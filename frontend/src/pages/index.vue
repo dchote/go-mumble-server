@@ -33,6 +33,7 @@
                     <th>Username</th>
                     <th v-if="isAdmin">IP Address</th>
                     <th>Crypto</th>
+                    <th>Transport</th>
                     <th>Ping</th>
                   </tr>
                 </thead>
@@ -40,8 +41,33 @@
                   <tr v-for="u in connectedUsers" :key="u.session_id">
                     <td>{{ u.name || u.username || 'Unknown' }}</td>
                     <td v-if="isAdmin">{{ u.address || u.ip || '-' }}</td>
-                    <td>{{ u.crypto_mode || u.cryptoMode || '-' }}</td>
-                    <td>{{ u.ping != null ? `${u.ping} ms` : '-' }}</td>
+                    <td>
+                      <v-chip
+                        v-if="u.crypto_mode || u.cryptoMode"
+                        size="x-small"
+                        variant="tonal"
+                        density="compact"
+                        :color="cryptoColor(u.crypto_mode || u.cryptoMode)"
+                        class="mr-1"
+                      >
+                        {{ (u.crypto_mode || u.cryptoMode) }}
+                      </v-chip>
+                      <span v-else class="text-medium-emphasis">—</span>
+                    </td>
+                    <td>
+                      <v-chip
+                        v-if="u.voice_transport || u.voiceTransport"
+                        size="x-small"
+                        variant="tonal"
+                        density="compact"
+                        :color="(u.voice_transport || u.voiceTransport) === 'udp' ? 'success' : 'info'"
+                        class="mr-1"
+                      >
+                        {{ (u.voice_transport || u.voiceTransport).toUpperCase() }}
+                      </v-chip>
+                      <span v-else class="text-medium-emphasis">—</span>
+                    </td>
+                    <td>{{ u.ping != null ? `${u.ping} ms` : '—' }}</td>
                   </tr>
                 </tbody>
               </v-table>
@@ -69,6 +95,11 @@ const isAdmin = computed(() => store.getters['auth/isAdmin'])
 const connectedUsersCount = computed(() => {
   return connectedUsers.value?.length ?? 0
 })
+
+function cryptoColor(mode) {
+  const colors = { legacy: 'secondary', lite: 'info', secure: 'success', mixed: 'warning' }
+  return colors[mode] || 'secondary'
+}
 
 onMounted(async () => {
   try {

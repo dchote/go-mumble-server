@@ -32,6 +32,7 @@ type Config struct {
 	CertRequired   bool
 	Bonjour        bool
 	RegisterName   string
+	VoiceDebug     bool
 }
 
 // fileConfig mirrors the TOML structure for parsing.

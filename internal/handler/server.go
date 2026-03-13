@@ -21,6 +21,9 @@ import (
 // ch is the channel for create/update; for delete, ch is nil and channelID is the removed ID.
 type OnChannelMutated func(serverID uint, ch interface{}, channelID uint32, removed bool)
 
+// OnConfigChange is called when per-server config is updated via REST (e.g. voice_debug).
+type OnConfigChange func(serverID uint)
+
 // ConnectedUserLister lists connected Mumble users; used by GetUsers.
 type ConnectedUserLister interface {
 	ListConnected(serverID uint, db *gorm.DB, includeSensitive bool) interface{}
@@ -47,18 +50,19 @@ type ServerHandler struct {
 	channelCrypto    ChannelCryptoLister
 	getChanMgr       func(serverID uint) *channel.Manager
 	onChannelMutated OnChannelMutated
+	onConfigChange   OnConfigChange
 	metaHost         string
 	metaMumblePort   int
 }
 
 // NewServerHandler creates a ServerHandler.
-func NewServerHandler(db *gorm.DB, cfg *config.Config, connectedUsers ConnectedUserLister, userActioner ConnectedUserActioner, channelCrypto ChannelCryptoLister, getChanMgr func(serverID uint) *channel.Manager, onChannelMutated OnChannelMutated) *ServerHandler {
+func NewServerHandler(db *gorm.DB, cfg *config.Config, connectedUsers ConnectedUserLister, userActioner ConnectedUserActioner, channelCrypto ChannelCryptoLister, getChanMgr func(serverID uint) *channel.Manager, onChannelMutated OnChannelMutated, onConfigChange OnConfigChange) *ServerHandler {
 	meta, _ := config.LoadMetaConfig(db)
 	host, port := "0.0.0.0", 64738
 	if meta != nil {
 		host, port = meta.Host, meta.MumblePort
 	}
-	return &ServerHandler{db: db, cfg: cfg, connectedUsers: connectedUsers, userActioner: userActioner, channelCrypto: channelCrypto, getChanMgr: getChanMgr, onChannelMutated: onChannelMutated, metaHost: host, metaMumblePort: port}
+	return &ServerHandler{db: db, cfg: cfg, connectedUsers: connectedUsers, userActioner: userActioner, channelCrypto: channelCrypto, getChanMgr: getChanMgr, onChannelMutated: onChannelMutated, onConfigChange: onConfigChange, metaHost: host, metaMumblePort: port}
 }
 
 // List returns all virtual servers. Seeds a default server if none exist.
@@ -224,6 +228,7 @@ func (h *ServerHandler) GetConfig(w http.ResponseWriter, r *http.Request) {
 		"cert_required":         sc.CertRequired,
 		"channel_nesting_limit": sc.ChannelNestingLimit,
 		"channel_count_limit":   sc.ChannelCountLimit,
+		"voice_debug":           sc.VoiceDebug,
 	})
 }
 
@@ -243,6 +248,7 @@ func (h *ServerHandler) UpdateConfig(w http.ResponseWriter, r *http.Request) {
 		CertRequired        *bool   `json:"cert_required"`
 		ChannelNestingLimit *int    `json:"channel_nesting_limit"`
 		ChannelCountLimit   *int    `json:"channel_count_limit"`
+		VoiceDebug          *bool   `json:"voice_debug"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		http.Error(w, `{"error":"invalid request body"}`, http.StatusBadRequest)
@@ -283,10 +289,16 @@ func (h *ServerHandler) UpdateConfig(w http.ResponseWriter, r *http.Request) {
 	if body.ChannelCountLimit != nil {
 		updates["channel_count_limit"] = *body.ChannelCountLimit
 	}
+	if body.VoiceDebug != nil {
+		updates["voice_debug"] = *body.VoiceDebug
+	}
 	if len(updates) > 0 {
 		if err := h.db.Model(&sc).Updates(updates).Error; err != nil {
 			http.Error(w, `{"error":"failed to update config"}`, http.StatusInternalServerError)
 			return
+		}
+		if h.onConfigChange != nil {
+			h.onConfigChange(uint(id))
 		}
 	}
 	w.WriteHeader(http.StatusNoContent)

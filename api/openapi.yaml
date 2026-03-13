@@ -42,6 +42,10 @@ components:
           type: string
           description: Negotiated UDP crypto tier (lite, legacy, secure)
           enum: [lite, legacy, secure]
+        voice_transport:
+          type: string
+          description: Voice transport strategy (udp = native UDP, tcp = TCP tunnel)
+          enum: [udp, tcp]
         self_mute:
           type: boolean
           description: User has muted themselves
@@ -91,6 +95,20 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/ChannelNode'
+    ServerConfig:
+      type: object
+      description: Per-virtual-server configuration
+      properties:
+        max_users: { type: integer }
+        max_bandwidth: { type: integer }
+        welcome_text: { type: string }
+        default_channel: { type: integer }
+        cert_required: { type: boolean }
+        channel_nesting_limit: { type: integer }
+        channel_count_limit: { type: integer }
+        voice_debug:
+          type: boolean
+          description: Enable voice path debugging (verbose logs for UDP/TCP tunnel diagnosis)
   securitySchemes:
     bearerAuth:
       type: http
@@ -282,6 +300,50 @@ paths:
           description: Deleted
         '404':
           description: Not found
+  /api/v1/servers/{id}/config:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: integer
+    get:
+      summary: Get server config
+      operationId: getServerConfig
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Per-server configuration
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ServerConfig'
+    patch:
+      summary: Update server config
+      description: Requires admin role.
+      operationId: updateServerConfig
+      security:
+        - bearerAuth: []
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                max_users: { type: integer }
+                max_bandwidth: { type: integer }
+                welcome_text: { type: string }
+                default_channel: { type: integer }
+                cert_required: { type: boolean }
+                channel_nesting_limit: { type: integer }
+                channel_count_limit: { type: integer }
+                voice_debug:
+                  type: boolean
+                  description: Enable voice path debugging (verbose logs for UDP/TCP tunnel diagnosis)
+      responses:
+        '204':
+          description: Updated
   /api/v1/servers/{id}/bans:
     get:
       summary: List bans

@@ -128,7 +128,17 @@ func (s *Server) Start(ctx context.Context) error {
 			ms.BroadcastChannelState(c)
 		}
 	}
-	handler := rest.RouterWithMumble(s.db, cfg, s.feFS, &rest.MumbleUserAdapter{Manager: ms.UserManager()}, &rest.MumbleUserActionAdapter{Server: ms, ServerID: 1}, &rest.MumbleChannelCryptoAdapter{Server: ms, ServerID: 1}, getChanMgr, onACLChange, onBanChange, onChannelMutated)
+	onConfigChange := func(serverID uint) {
+		if serverID != 1 {
+			return
+		}
+		serverCfg, err := config.LoadServerConfig(s.db, 1)
+		if err != nil {
+			return
+		}
+		ms.SetVoiceDebug(serverCfg.VoiceDebug)
+	}
+	handler := rest.RouterWithMumble(s.db, cfg, s.feFS, &rest.MumbleUserAdapter{Manager: ms.UserManager(), Server: ms}, &rest.MumbleUserActionAdapter{Server: ms, ServerID: 1}, &rest.MumbleChannelCryptoAdapter{Server: ms, ServerID: 1}, getChanMgr, onACLChange, onBanChange, onChannelMutated, onConfigChange)
 	s.http = &http.Server{
 		Addr:    restAddr,
 		Handler: handler,

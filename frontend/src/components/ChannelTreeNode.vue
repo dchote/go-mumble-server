@@ -68,6 +68,16 @@
               {{ (u.crypto_mode || u.cryptoMode) }}
             </v-chip>
             <v-chip
+              v-if="u.voice_transport || u.voiceTransport"
+              size="x-small"
+              variant="tonal"
+              density="compact"
+              :color="(u.voice_transport || u.voiceTransport) === 'udp' ? 'success' : 'info'"
+              class="mr-1"
+            >
+              {{ (u.voice_transport || u.voiceTransport).toUpperCase() }}
+            </v-chip>
+            <v-chip
               v-if="u.is_admin || u.isAdmin"
               size="x-small"
               color="primary"

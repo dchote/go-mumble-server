@@ -20,7 +20,7 @@ The server negotiates crypto mode per client over TLS (Version exchange + CryptS
 
 - Added `sessionByAddr sync.Map` as a reverse lookup (UDP source address to session ID) alongside the existing `addrBySession`.
 - `HandleUDP` primary path: look up session by source address, decrypt with the session's known CryptState. No iteration needed.
-- Fallback path: trial decryption for unmapped addresses (first UDP packet from a new client). Populates both maps on success.
+- Fallback path: trial decryption for unmapped addresses (first UDP packet from a new client). Populates both maps on success. Trial decrypt failure warnings are down-leveled to Debug when another port from the same host is already mapped.
 - NAT rebinding: if a cached lookup's decrypt fails, the cache entry is cleared and trial decryption is retried.
 - Both maps are cleaned up on disconnect.
 

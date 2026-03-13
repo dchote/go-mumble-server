@@ -242,9 +242,25 @@ func (c *CryptState) decryptLegacy(dst, src []byte) error {
 
 	if diff == 1 {
 		c.decNonce[0] = ivByte
+		if ivByte < decFirst {
+			for i := 1; i < legacyNonceSize; i++ {
+				c.decNonce[i]++
+				if c.decNonce[i] != 0 {
+					break
+				}
+			}
+		}
 	} else if diff > 1 {
 		c.Lost += uint32(diff - 1)
 		c.decNonce[0] = ivByte
+		if ivByte < decFirst {
+			for i := 1; i < legacyNonceSize; i++ {
+				c.decNonce[i]++
+				if c.decNonce[i] != 0 {
+					break
+				}
+			}
+		}
 	} else if diff > -30 && diff < 0 {
 		c.Late++
 		c.decNonce[0] = ivByte

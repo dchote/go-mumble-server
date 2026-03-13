@@ -16,6 +16,7 @@ type ServerConfig struct {
 	DefaultChannel     int    `gorm:"not null;default:0" json:"default_channel"`
 	CertRequired       bool   `gorm:"not null;default:false" json:"cert_required"`
 	ServerPassword     string `gorm:"size:255" json:"-"` // hashed or plain per deployment
+	VoiceDebug         bool   `gorm:"not null;default:false" json:"voice_debug"`
 }
 
 // TableName returns the table name.

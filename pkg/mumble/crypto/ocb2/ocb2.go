@@ -125,6 +125,7 @@ func Decrypt(block cipher.Block, dst, src, nonce, tag []byte) bool {
 	xor(tmp[:], tmp[:], delta[:])
 	block.Encrypt(pad[:], tmp[:])
 	xor(tmp[:], src[off:off+remain], pad[:])
+	copy(tmp[remain:], pad[remain:]) // pad rest for checksum (per OCB spec)
 	xor(checksum[:], checksum[:], tmp[:])
 	copy(dst[off:off+remain], tmp[:remain])
 

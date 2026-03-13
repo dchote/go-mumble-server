@@ -143,6 +143,8 @@ The server identifies UDP packet senders using a two-tier strategy:
 
 3. **NAT rebinding** — If a cached address lookup's decryption fails (source port changed due to NAT), the cache entry is cleared and the server falls back to trial decryption, then re-caches the new address.
 
+4. **Same-host, different port** — When trial decryption fails and another address from the same host (IP) is already mapped to a session, the failure is logged at Debug level instead of Warn. This reduces log noise when clients send from multiple ports (e.g. probe port vs voice port).
+
 ## Reference
 
 - OCB2 vulnerability: [Cryptanalysis of OCB2](https://eprint.iacr.org/2019/311) (CRYPTO 2019)

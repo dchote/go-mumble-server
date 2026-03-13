@@ -7,7 +7,6 @@ import (
 )
 
 func TestCryptState_LegacyRoundTrip(t *testing.T) {
-	t.Skip("OCB2 legacy round-trip: debug with real Mumble client")
 	key := make([]byte, 16)
 	clientNonce := make([]byte, 16)
 	rand.Read(key)
