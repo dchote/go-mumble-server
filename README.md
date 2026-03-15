@@ -126,6 +126,16 @@ Use `-timeout=30s` to avoid hanging. For race detection: `CGO_ENABLED=1 go test 
 MUMBLE_MUMBLE_PORT=64738 MUMBLE_REST_PORT=64730 ./go-mumble-server
 ```
 
+## Home Assistant Add-on
+
+You can run go-mumble-server as a [Home Assistant add-on](https://www.home-assistant.io/addons/). Add this repository in Home Assistant:
+
+1. **Settings** → **Add-ons** → **Add-on store** → **Repositories**
+2. Add: `https://github.com/dchote/go-mumble-server`
+3. Install **go-mumble-server**, configure options, and start the add-on.
+
+The management web UI is available via the add-on’s **Open Web UI** button (ingress). The Mumble protocol port (default 64738) is exposed for client connections. See [addon/DOCS.md](addon/DOCS.md) for add-on documentation. If you use a fork of this repo as an add-on repository, you will need to [update the add-on image URL](addon/DOCS.md#forks) or build and push your own images.
+
 ## Configuration
 
 Configuration uses a **two-tier** model:

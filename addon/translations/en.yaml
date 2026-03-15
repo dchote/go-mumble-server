@@ -1,0 +1,43 @@
+configuration:
+  mumble_port:
+    name: Mumble port
+    description: TCP/UDP port for Mumble protocol and voice (default 64738).
+  rest_port:
+    name: REST API port
+    description: Port for REST API and web UI (used by ingress; do not change unless needed).
+  max_users:
+    name: Max users
+    description: Maximum concurrent users per virtual server (0 = unlimited).
+  max_bandwidth:
+    name: Max bandwidth
+    description: Maximum bandwidth per user in bits/sec.
+  log_level:
+    name: Log level
+    description: Logging level (debug, info, warn, error).
+  welcome_text:
+    name: Welcome text
+    description: HTML welcome message shown to connecting clients (optional).
+  server_password:
+    name: Server password
+    description: Password required to connect to the server (optional).
+  ssl_cert:
+    name: SSL certificate path
+    description: Path to TLS certificate PEM file (optional; auto-generated if empty).
+  ssl_key:
+    name: SSL key path
+    description: Path to TLS private key PEM file (optional; auto-generated if empty).
+  bonjour:
+    name: Bonjour/mDNS
+    description: Enable LAN discovery via Bonjour/mDNS.
+  register_name:
+    name: Bonjour register name
+    description: Display name for Bonjour LAN discovery.
+  channel_nesting_limit:
+    name: Channel nesting limit
+    description: Maximum channel nesting depth.
+  channel_count_limit:
+    name: Channel count limit
+    description: Maximum total number of channels.
+  cert_required:
+    name: Certificate required
+    description: Require client certificates for user authentication.

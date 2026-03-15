@@ -1,7 +1,12 @@
+// Store/router are used only inside request(), which runs after app init (no use at import time).
 import store from '@/store'
 import router from '@/router'
+import { getIngressBase } from '@/utils/ingress'
 
-const base = '/api/v1'
+function getApiBase() {
+  const base = getIngressBase()
+  return base ? base + '/api/v1' : '/api/v1'
+}
 
 async function request(path, options = {}) {
   const token = store.getters['auth/token']
@@ -13,7 +18,7 @@ async function request(path, options = {}) {
     headers.Authorization = `Bearer ${token}`
   }
 
-  const res = await fetch(base + path, {
+  const res = await fetch(getApiBase() + path, {
     ...options,
     headers,
   })

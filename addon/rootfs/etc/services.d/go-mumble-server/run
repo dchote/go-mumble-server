@@ -1,0 +1,25 @@
+#!/usr/bin/with-contenv bashio
+# ==============================================================================
+# Start go-mumble-server
+# s6-overlay docs: https://github.com/just-containers/s6-overlay
+# ==============================================================================
+
+export MUMBLE_DATABASE_PATH=/data/mumble-server.sqlite
+export MUMBLE_HOST=0.0.0.0
+
+export MUMBLE_MUMBLE_PORT=$(bashio::config 'mumble_port')
+export MUMBLE_REST_PORT=$(bashio::config 'rest_port')
+export MUMBLE_MAX_USERS=$(bashio::config 'max_users')
+export MUMBLE_MAX_BANDWIDTH=$(bashio::config 'max_bandwidth')
+export MUMBLE_LOG_LEVEL=$(bashio::config 'log_level')
+export MUMBLE_BONJOUR=$(bashio::config 'bonjour')
+export MUMBLE_CHANNEL_NESTING_LIMIT=$(bashio::config 'channel_nesting_limit')
+export MUMBLE_CHANNEL_COUNT_LIMIT=$(bashio::config 'channel_count_limit')
+export MUMBLE_CERT_REQUIRED=$(bashio::config 'cert_required')
+export MUMBLE_REGISTER_NAME=$(bashio::config 'register_name')
+export MUMBLE_WELCOME_TEXT=$(bashio::config 'welcome_text')
+export MUMBLE_SERVER_PASSWORD=$(bashio::config 'server_password')
+export MUMBLE_SSL_CERT_PATH=$(bashio::config 'ssl_cert')
+export MUMBLE_SSL_KEY_PATH=$(bashio::config 'ssl_key')
+
+exec /usr/bin/go-mumble-server -frontend-embed=true

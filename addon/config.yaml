@@ -1,0 +1,52 @@
+# https://developers.home-assistant.io/docs/add-ons/configuration
+name: go-mumble-server
+description: Mumble voice chat server (wire-compatible with Murmur). REST API and web UI for management.
+version: "0.1.0"
+slug: go-mumble-server
+url: "https://github.com/dchote/go-mumble-server/tree/main/addon"
+arch:
+  - aarch64
+  - amd64
+init: false
+ingress: true
+ingress_port: 64730
+panel_icon: mdi:microphone
+map:
+  - ssl:ro
+ports:
+  64738/tcp: 64738
+  64738/udp: 64738
+ports_description:
+  64738/tcp: Mumble protocol (TCP). Required for client connections.
+  64738/udp: Mumble voice (UDP). Required for voice.
+options:
+  mumble_port: 64738
+  rest_port: 64730
+  max_users: 100
+  max_bandwidth: 72000
+  log_level: info
+  welcome_text: ""
+  server_password: ""
+  ssl_cert: ""
+  ssl_key: ""
+  bonjour: false
+  register_name: "go-mumble-server"
+  channel_nesting_limit: 10
+  channel_count_limit: 1000
+  cert_required: false
+schema:
+  mumble_port: int
+  rest_port: int
+  max_users: int
+  max_bandwidth: int
+  log_level: list(debug|info|warn|error)
+  welcome_text: str?
+  server_password: password?
+  ssl_cert: str?
+  ssl_key: str?
+  bonjour: bool
+  register_name: str?
+  channel_nesting_limit: int
+  channel_count_limit: int
+  cert_required: bool
+image: "ghcr.io/dchote/{arch}-addon-go-mumble-server"

@@ -1,6 +1,7 @@
 package rest
 
 import (
+	"bytes"
 	"io"
 	"io/fs"
 	"mime"
@@ -173,6 +174,17 @@ func isAssetPath(path string) bool {
 	return strings.HasPrefix(path, "assets/")
 }
 
+// appBaseHref returns the base href for the SPA so relative asset URLs resolve correctly
+// (e.g. on reload of /servers/1 or under HA ingress /api/hassio_ingress/<token>/...).
+func appBaseHref(requestPath string) string {
+	path := strings.TrimPrefix(requestPath, "/")
+	parts := strings.Split(path, "/")
+	if len(parts) >= 3 && parts[0] == "api" && parts[1] == "hassio_ingress" && parts[2] != "" {
+		return "/" + strings.Join(parts[0:3], "/") + "/"
+	}
+	return "/"
+}
+
 func spaHandler(feFS fs.FS) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if feFS == nil {
@@ -204,6 +216,24 @@ func spaHandler(feFS fs.FS) http.HandlerFunc {
 		}
 		if ct := mime.TypeByExtension(filepath.Ext(path)); ct != "" {
 			w.Header().Set("Content-Type", ct)
+		}
+		if path == "index.html" {
+			// Inject <base href="..."> so relative asset URLs (./assets/...) resolve correctly
+			// on direct load or reload of routes like /servers/1 or under HA ingress.
+			body, err := io.ReadAll(f)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			base := appBaseHref(r.URL.Path)
+			baseTag := []byte("<base href=\"" + base + "\">")
+			head := []byte("<head>")
+			idx := bytes.Index(body, head)
+			if idx >= 0 {
+				body = bytes.Join([][]byte{body[:idx+len(head)], baseTag, body[idx+len(head):]}, nil)
+			}
+			w.Write(body)
+			return
 		}
 		if rs, ok := f.(io.ReadSeeker); ok {
 			http.ServeContent(w, r, path, stat.ModTime(), rs)

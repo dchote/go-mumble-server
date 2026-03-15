@@ -18,7 +18,7 @@ RUN go mod download
 COPY . .
 COPY --from=frontend /app/frontend/dist ./cmd/go-mumble-server/frontend-dist
 
-RUN go build -ldflags "-s -w" -o go-mumble-server ./cmd/go-mumble-server
+RUN go build -ldflags "-s -w" -tags embed_frontend -o go-mumble-server ./cmd/go-mumble-server
 
 FROM debian:bookworm-slim
 WORKDIR /app

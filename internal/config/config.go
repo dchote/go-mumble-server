@@ -211,4 +211,28 @@ func applyEnv(cfg *Config) {
 	if v := os.Getenv("MUMBLE_REGISTER_NAME"); v != "" {
 		cfg.RegisterName = v
 	}
+	if v := os.Getenv("MUMBLE_WELCOME_TEXT"); v != "" {
+		cfg.WelcomeText = v
+	}
+	if v := os.Getenv("MUMBLE_SERVER_PASSWORD"); v != "" {
+		cfg.ServerPassword = v
+	}
+	if v := os.Getenv("MUMBLE_CHANNEL_NESTING_LIMIT"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			cfg.ChannelDepth = n
+		}
+	}
+	if v := os.Getenv("MUMBLE_CHANNEL_COUNT_LIMIT"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			cfg.ChannelCount = n
+		}
+	}
+	if v := os.Getenv("MUMBLE_DEFAULT_CHANNEL"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			cfg.DefaultChannel = n
+		}
+	}
+	if v := os.Getenv("MUMBLE_CERT_REQUIRED"); v != "" {
+		cfg.CertRequired = strings.ToLower(v) == "true" || v == "1"
+	}
 }

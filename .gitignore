@@ -1,6 +1,7 @@
 # Build output
 build/
 go-mumble-server
+!addon/rootfs/**
 test-client
 dist/
 

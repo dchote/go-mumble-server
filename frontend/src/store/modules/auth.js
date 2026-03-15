@@ -1,3 +1,5 @@
+import api from '@/utils/api'
+
 const TOKEN_KEY = 'go-mumble-server:token'
 const USER_KEY = 'go-mumble-server:user'
 
@@ -45,29 +47,13 @@ const mutations = {
 
 const actions = {
   async login({ commit }, { username, password }) {
-    const res = await fetch('/api/v1/auth/login', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ username, password }),
-    })
-    const data = await res.json()
-    if (!res.ok) {
-      throw new Error(data.error || 'Login failed')
-    }
+    const data = await api.post('/auth/login', { username, password })
     commit('setAuth', { token: data.token, user: data.user })
     commit('setHasUsers', true)
     return data
   },
   async register({ commit }, { username, password }) {
-    const res = await fetch('/api/v1/auth/register', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ username, password }),
-    })
-    const data = await res.json()
-    if (!res.ok) {
-      throw new Error(data.error || 'Registration failed')
-    }
+    const data = await api.post('/auth/register', { username, password })
     commit('setAuth', { token: data.token, user: data.user })
     commit('setHasUsers', true)
     return data
@@ -78,18 +64,9 @@ const actions = {
   },
   async checkAuthStatus({ state, commit }) {
     const token = state.token
-    const headers = { 'Content-Type': 'application/json' }
-    if (token) {
-      headers.Authorization = `Bearer ${token}`
-    }
     try {
-      const res = await fetch('/api/v1/auth/status', { headers })
-      const data = await res.json()
+      const data = await api.get('/auth/status')
       if (token) {
-        if (res.status === 401) {
-          commit('clearAuth')
-          return { valid: false }
-        }
         if (data.user) {
           commit('setAuth', { token, user: data.user })
           return { valid: true, user: data.user }

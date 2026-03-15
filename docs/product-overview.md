@@ -13,7 +13,7 @@ The original Mumble server (Murmur) is a mature C++/Qt application that has serv
 - **Simplicity** — A single, statically-linked binary with zero runtime dependencies. No Qt, no C++ toolchain, no shared library management.
 - **Reusable protocol library** — The Mumble protocol implementation lives in importable `pkg/` packages. Build clients, bots, monitoring tools, or entirely new servers on the same foundation.
 - **Operational clarity** — Structured logging, health endpoints, and a REST management API with Swagger documentation out of the box.
-- **Deployment flexibility** — Runs anywhere Go runs. Trivial containerization. Native cross-compilation for Linux, macOS, Windows, and ARM targets.
+- **Deployment flexibility** — Runs anywhere Go runs. Trivial containerization. Native cross-compilation for Linux, macOS, Windows, and ARM targets. The repository can also be added as a Home Assistant add-on repository for one-click install; see the README and addon documentation.
 - **Maintainability** — Go's straightforward concurrency model (goroutines and channels) replaces the original's intricate mutex hierarchy and Qt signal/slot threading.
 
 ## Two-Layer Architecture
