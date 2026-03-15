@@ -134,7 +134,7 @@ You can run go-mumble-server as a [Home Assistant add-on](https://www.home-assis
 2. Add: `https://github.com/dchote/go-mumble-server`
 3. Install **go-mumble-server**, configure options, and start the add-on.
 
-The management web UI is available via the add-on’s **Open Web UI** button (ingress). The Mumble protocol port (default 64738) is exposed for client connections. See [addon/DOCS.md](addon/DOCS.md) for add-on documentation. If you use a fork of this repo as an add-on repository, you will need to [update the add-on image URL](addon/DOCS.md#forks) or build and push your own images.
+The management web UI is available via the add-on’s **Open Web UI** button (ingress). The Mumble protocol port (default 64738) is exposed for client connections. See [addon/README.md](addon/README.md) for add-on documentation. If you use a fork of this repo as an add-on repository, you will need to [update the add-on image URL](addon/README.md#forks) or build and push your own images.
 
 ## Configuration
 

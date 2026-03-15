@@ -24,7 +24,7 @@ The repository doubles as a Home Assistant add-on repository. Users can add `htt
 - `addon/rootfs/etc/services.d/go-mumble-server/run` — s6 run script: sets `MUMBLE_*` from options, execs binary.
 - `addon/rootfs/etc/services.d/go-mumble-server/finish` — s6 finish script for exit handling.
 - `addon/translations/en.yaml` — Option names and descriptions for the HA config UI.
-- `addon/DOCS.md` — Add-on user documentation.
+- `addon/README.md` — Add-on user documentation.
 - `addon/CHANGELOG.md` — Add-on changelog.
 - `.github/workflows/addon.yml` — Build and push amd64/aarch64 images to GHCR on tags, main (addon-related paths), and workflow_dispatch.
 
