@@ -1,6 +1,9 @@
 name: Release
 
 on:
+  push:
+    tags:
+      - 'v*'
   workflow_dispatch:
 
 jobs:
@@ -27,11 +30,11 @@ jobs:
 
       - name: Run GoReleaser (goreleaser-cross for CGO)
         run: |
-          if [ "${{ github.event_name }}" = "release" ]; then
-            ARGS="release --clean"
-            TAG="${{ github.event.release.tag_name }}"
+          if [ "${{ github.event_name }}" = "push" ] && [ -n "${{ github.ref_name }}" ]; then
+            ARGS="release --clean --parallelism 1"
+            TAG="${{ github.ref_name }}"
           else
-            ARGS="release --snapshot --skip=publish --clean"
+            ARGS="release --snapshot --skip=publish --clean --parallelism 1"
             TAG="v0.0.0-${{ github.sha }}"
           fi
           docker run --rm --privileged \

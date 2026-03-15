@@ -1,3 +1,5 @@
+# Goreleaser config for Linux amd64 only. Used by scripts/build-deb.sh to build
+# in an amd64 container so CGO uses the correct toolchain.
 version: 2
 
 project_name: go-mumble-server
@@ -10,7 +12,6 @@ builds:
       - linux
     goarch:
       - amd64
-      - arm64
     env:
       - CGO_ENABLED=1
     tags:

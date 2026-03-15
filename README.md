@@ -79,6 +79,18 @@ See [docs/build-and-test.md](docs/build-and-test.md) for the full build and test
 
 This builds the Vue frontend, copies the dist into the Go embed location, and compiles the server binary to `build/go-mumble-server`. The frontend is embedded in the binary via `//go:embed`.
 
+### Building Debian packages (.deb)
+
+On macOS or Linux, you can build `.deb` packages locally (same as CI) using Docker:
+
+```bash
+make build-deb
+# or
+./scripts/build-deb.sh
+```
+
+Output is in `dist/*.deb` (amd64 and arm64). Use `SKIP_FRONTEND=1 ./scripts/build-deb.sh` to skip the frontend step if it is already built. See [Build and Test](docs/build-and-test.md#building-debian-packages-deb-on-macos-or-linux) for details. **Releases** on GitHub include Linux amd64/arm64 binaries and these .deb packages when you push a version tag (e.g. `v1.0.0`).
+
 ### Server only (skip frontend)
 
 ```bash
