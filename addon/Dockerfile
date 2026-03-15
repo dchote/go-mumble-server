@@ -1,6 +1,6 @@
 # Multi-stage build for Home Assistant addon. Build with context at repo root:
 #   docker build -f addon/Dockerfile --build-arg BUILD_FROM=ghcr.io/... .
-ARG BUILD_FROM
+ARG BUILD_FROM=ghcr.io/hassio-addons/debian-base/amd64:9.2.0
 FROM node:20-bookworm-slim AS frontend
 WORKDIR /app/frontend
 
@@ -10,7 +10,7 @@ RUN yarn install --frozen-lockfile
 COPY frontend/ ./
 RUN yarn build
 
-FROM golang:1.24-bookworm AS builder
+FROM golang:1.25-bookworm AS builder
 WORKDIR /app
 
 ENV CGO_ENABLED=1
