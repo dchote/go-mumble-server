@@ -69,7 +69,7 @@ To only build the frontend (e.g. before running the Docker step yourself): `make
 
 ## Releases
 
-GitHub Releases are produced when you push a version tag (e.g. `v1.0.0`). Each release includes:
+GitHub Releases are produced when you push a version tag (e.g. `v0.1.0`). Each release includes:
 
 - **Linux binaries** — amd64 and arm64
 - **Debian packages** — `*_amd64.deb` and `*_arm64.deb` for easy installation on Debian/Ubuntu

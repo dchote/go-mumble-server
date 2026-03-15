@@ -66,6 +66,9 @@ jobs:
             ${{ steps.vars.outputs.args }} -f .goreleaser-arm64.yaml
           mv dist dist-arm64
 
+      - name: Fix ownership of build artifacts
+        run: sudo chown -R $(id -u):$(id -g) dist-amd64 dist-arm64
+
       - name: Merge dist outputs
         run: |
           mkdir -p dist

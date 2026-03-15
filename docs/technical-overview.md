@@ -1,8 +1,8 @@
 # Technical Overview
 
-> **Status:** Implementation in progress — protocol library complete; server implements core Mumble protocol (connection lifecycle, authentication, channels, users, text messaging, voice routing, ACLs, bans). REST API, web UI, and persistence functional. Full ACL inheritance and advanced features in progress.
+> **Status:** Functionally complete (beta). Protocol library and server implement the full Mumble feature set; REST API, web UI, and persistence are production-ready. Ready for v0.1 release.
 
-go-mumble-server is a native Go implementation of the Mumble voice chat server, built on a reusable protocol library. This document describes the planned architecture, subsystems, and design decisions.
+go-mumble-server is a native Go implementation of the Mumble voice chat server, built on a reusable protocol library. This document describes the architecture, subsystems, and design decisions.
 
 ## Technology Stack
 

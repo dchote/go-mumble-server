@@ -2,6 +2,8 @@
 
 **go-mumble-server** is a modern, from-scratch implementation of the Mumble voice chat server written in Go. It implements the full Mumble protocol and is wire-compatible with all existing Mumble clients — any standard Mumble client can connect and use it as a drop-in replacement for the original Murmur server.
 
+**Status: Beta** — Functionally complete; v0.1 release ready.
+
 The project is structured as two layers: a **reusable Mumble protocol library** (`pkg/`) that can be imported by any Go project, and a **production server** built on top of it. The library provides everything needed to implement Mumble clients, bots, bridges, or alternative servers in Go.
 
 ## Motivation

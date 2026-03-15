@@ -4,6 +4,8 @@ A modern, from-scratch implementation of the [Mumble](https://www.mumble.info/) 
 
 The Mumble protocol implementation is a **reusable Go library** (`pkg/mumble/`) that can be imported independently to build clients, bots, bridges, or other tools.
 
+**Status: Beta** — Functionally complete; ready for v0.1 release. [Releases](https://github.com/dchote/go-mumble-server/releases) provide Linux amd64/arm64 binaries and .deb packages.
+
 ## Overview
 
 go-mumble-server re-imagines the Mumble server with modern priorities: a single static binary, zero runtime dependencies, built-in REST management API, and Go's straightforward concurrency model replacing the original's C++/Qt complexity.
@@ -89,7 +91,7 @@ make build-deb
 ./scripts/build-deb.sh
 ```
 
-Output is in `dist/*.deb` (amd64 and arm64). Use `SKIP_FRONTEND=1 ./scripts/build-deb.sh` to skip the frontend step if it is already built. See [Build and Test](docs/build-and-test.md#building-debian-packages-deb-on-macos-or-linux) for details. **Releases** on GitHub include Linux amd64/arm64 binaries and these .deb packages when you push a version tag (e.g. `v1.0.0`).
+Output is in `dist/*.deb` (amd64 and arm64). Use `SKIP_FRONTEND=1 ./scripts/build-deb.sh` to skip the frontend step if it is already built. See [Build and Test](docs/build-and-test.md#building-debian-packages-deb-on-macos-or-linux) for details. **Releases** on GitHub include Linux amd64/arm64 binaries and these .deb packages when you push a version tag (e.g. `v0.1.0`).
 
 ### Server only (skip frontend)
 
