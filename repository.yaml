@@ -1,4 +1,4 @@
 # https://developers.home-assistant.io/docs/add-ons/repository#repository-configuration
-name: go-mumble-server Home Assistant add-on repository
+name: go-mumble-server
 url: "https://github.com/dchote/go-mumble-server"
 maintainer: "go-mumble-server contributors"

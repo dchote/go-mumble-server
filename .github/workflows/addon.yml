@@ -32,9 +32,12 @@ jobs:
         id: tag
         run: |
           if [[ "${{ github.ref }}" == refs/tags/v* ]]; then
-            echo "tag=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
+            # Use version without 'v' so Supervisor can pull (addon version in config.yaml must match)
+            echo "tag=${GITHUB_REF#refs/tags/v}" >> "$GITHUB_OUTPUT"
           else
-            echo "tag=latest" >> "$GITHUB_OUTPUT"
+            # Manual run: use addon version from config so Supervisor finds the image
+            VERSION=$(grep '^version:' addon/config.yaml | sed 's/version: *"\?\([^"]*\)"\?/\1/' | tr -d ' ')
+            echo "tag=${VERSION:-latest}" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Login to GHCR
