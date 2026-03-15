@@ -15,6 +15,9 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Set up QEMU (for arm64 container on amd64 runner)
+        uses: docker/setup-qemu-action@v3
+
       - name: Set up Node
         uses: actions/setup-node@v4
         with:
