@@ -47,6 +47,15 @@ Click **Open Web UI** in the add-on panel to open the management interface. You 
 
 The web UI and REST API are served through Home Assistant ingress (no separate port or firewall rules).
 
+## Publishing (maintainers)
+
+For the add-on to install, the container images must exist and be **public**:
+
+1. **Build and push images** — In the repo go to **Actions** → **Addon** → **Run workflow**. This pushes `ghcr.io/owner/amd64-addon-go-mumble-server:0.1.0` and `ghcr.io/owner/aarch64-addon-go-mumble-server:0.1.0` (tag = addon `version` in `config.yaml`). Pushing a tag `v*` (e.g. `v0.1.0`) also runs the workflow and tags the image with the version without `v` (e.g. `0.1.0`).
+2. **Make the package public** — On GitHub open the repo → **Packages** (right-hand side), or go to [ghcr.io](https://ghcr.io) and open the `addon-go-mumble-server` package. In **Package settings** set **Visibility** to **Public** so the Home Assistant Supervisor can pull without authentication. Do this for both `amd64-addon-go-mumble-server` and `aarch64-addon-go-mumble-server` if they appear separately.
+
+If install fails with **404** or **manifest unknown**, the image tag likely doesn’t match the addon version (Supervisor uses `config.yaml` version as the image tag) or the package is still private.
+
 ## Forks
 
 If you install the add-on from a fork of this repository, the add-on will still try to pull images from the upstream image URL (`ghcr.io/dchote/...`). To use your own images, either:
