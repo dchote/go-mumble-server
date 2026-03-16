@@ -29,7 +29,7 @@ router.beforeEach(async (to) => {
   }
 
   if (!isAuth) {
-    return '/login'
+    return store.getters['auth/hasUsers'] ? '/login' : '/register'
   }
 
   if (to.path.startsWith('/admin') && !store.getters['auth/isAdmin']) {

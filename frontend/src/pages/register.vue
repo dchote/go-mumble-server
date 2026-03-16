@@ -4,6 +4,9 @@
       <v-col cols="12" sm="8" md="6">
         <StandardCard title="Sign up">
           <v-form @submit.prevent="handleRegister">
+              <v-alert v-if="!hasUsers" type="info" density="compact" class="mb-4">
+                No administrator account exists yet. Create the first admin account below.
+              </v-alert>
               <v-alert v-if="error" type="error" density="compact" class="mb-4">
                 {{ error }}
               </v-alert>
@@ -33,7 +36,7 @@
                 </v-btn>
               </div>
           </v-form>
-          <p class="text-body-2 mt-4 text-center">
+          <p v-if="hasUsers" class="text-body-2 mt-4 text-center">
             Already have an account?
             <router-link to="/login" class="text-primary text-decoration-none font-weight-medium">Login</router-link>
           </p>
@@ -44,13 +47,14 @@
 </template>
 
 <script setup>
-import { ref } from 'vue'
+import { ref, computed } from 'vue'
 import { useStore } from 'vuex'
 import { useRouter } from 'vue-router'
 import StandardCard from '@/components/common/StandardCard.vue'
 
 const store = useStore()
 const router = useRouter()
+const hasUsers = computed(() => store.getters['auth/hasUsers'])
 const username = ref('')
 const password = ref('')
 const error = ref('')
