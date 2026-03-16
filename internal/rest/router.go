@@ -218,19 +218,27 @@ func spaHandler(feFS fs.FS) http.HandlerFunc {
 			w.Header().Set("Content-Type", ct)
 		}
 		if path == "index.html" {
-			// Inject <base href="..."> so relative asset URLs (./assets/...) resolve correctly
-			// on direct load or reload of routes like /servers/1 or under HA ingress.
+			// Inject <base href="..."> only when we have a non-root path (e.g. /servers/1) so
+			// relative assets resolve to the app root. When path is "/" (e.g. under HA ingress,
+			// where the proxy forwards with path "/"), do not inject — the document URL is
+			// the ingress URL, so relative ./assets/ will resolve correctly under the ingress path.
 			body, err := io.ReadAll(f)
 			if err != nil {
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return
 			}
-			base := appBaseHref(r.URL.Path)
-			baseTag := []byte("<base href=\"" + base + "\">")
-			head := []byte("<head>")
-			idx := bytes.Index(body, head)
-			if idx >= 0 {
-				body = bytes.Join([][]byte{body[:idx+len(head)], baseTag, body[idx+len(head):]}, nil)
+			requestPath := strings.TrimSuffix(r.URL.Path, "/")
+			if requestPath == "" {
+				requestPath = "/"
+			}
+			if requestPath != "/" {
+				base := appBaseHref(r.URL.Path)
+				baseTag := []byte("<base href=\"" + base + "\">")
+				head := []byte("<head>")
+				idx := bytes.Index(body, head)
+				if idx >= 0 {
+					body = bytes.Join([][]byte{body[:idx+len(head)], baseTag, body[idx+len(head):]}, nil)
+				}
 			}
 			w.Write(body)
 			return
