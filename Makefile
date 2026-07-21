@@ -2,7 +2,7 @@
 # Requires: Docker, Node 20+ and yarn (for frontend), or use frontend-prebuilt
 
 REPO_SLUG ?= dchote/go-mumble-server
-GORELEASER_IMAGE ?= ghcr.io/goreleaser/goreleaser-cross:v1.24.0
+GORELEASER_IMAGE ?= ghcr.io/goreleaser/goreleaser-cross:v1.25.9
 
 .PHONY: frontend build-deb release-snapshot
 

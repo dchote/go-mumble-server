@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.2
+
+- Dependency and toolchain maintenance (Go modules, frontend packages, Go 1.25 alignment)
+
 ## 0.1.1
 
 - Fix "Open Web UI" under HA ingress: do not inject `<base href="/">` when request path is `/` so asset URLs resolve under the ingress path

@@ -50,7 +50,7 @@ jobs:
             -v /var/run/docker.sock:/var/run/docker.sock \
             -e CGO_ENABLED=1 \
             -e GORELEASER_CURRENT_TAG="${{ steps.vars.outputs.tag }}" \
-            ghcr.io/goreleaser/goreleaser-cross:v1.24.0 \
+            ghcr.io/goreleaser/goreleaser-cross:v1.25.9 \
             ${{ steps.vars.outputs.args }} -f .goreleaser-amd64.yaml
           mv dist dist-amd64
 
@@ -62,7 +62,7 @@ jobs:
             -v /var/run/docker.sock:/var/run/docker.sock \
             -e CGO_ENABLED=1 \
             -e GORELEASER_CURRENT_TAG="${{ steps.vars.outputs.tag }}" \
-            ghcr.io/goreleaser/goreleaser-cross:v1.24.0 \
+            ghcr.io/goreleaser/goreleaser-cross:v1.25.9 \
             ${{ steps.vars.outputs.args }} -f .goreleaser-arm64.yaml
           mv dist dist-arm64
 

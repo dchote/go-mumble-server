@@ -66,7 +66,7 @@ go-mumble-server re-imagines the Mumble server with modern priorities: a single 
 
 ## Requirements
 
-- Go 1.24+
+- Go 1.25+
 - Node.js 20+ and Yarn (for frontend development)
 
 ## Building

@@ -11,7 +11,7 @@
 set -e
 
 REPO_SLUG="${REPO_SLUG:-dchote/go-mumble-server}"
-GORELEASER_IMAGE="${GORELEASER_IMAGE:-ghcr.io/goreleaser/goreleaser-cross:v1.24.0}"
+GORELEASER_IMAGE="${GORELEASER_IMAGE:-ghcr.io/goreleaser/goreleaser-cross:v1.25.9}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"

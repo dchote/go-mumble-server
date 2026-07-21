@@ -76,7 +76,7 @@ const actions = {
       const hasUsers = data.hasUsers ?? true
       commit('setHasUsers', hasUsers)
       return { hasUsers }
-    } catch (e) {
+    } catch (_e) {
       if (token) {
         commit('clearAuth')
         return { valid: false }

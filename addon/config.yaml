@@ -1,7 +1,7 @@
 # https://developers.home-assistant.io/docs/add-ons/configuration
 name: go-mumble-server
 description: Mumble voice chat server (wire-compatible with Murmur). REST API and web UI for management.
-version: "0.1.1"
+version: "0.1.2"
 slug: go-mumble-server
 url: "https://github.com/dchote/go-mumble-server/tree/main/addon"
 arch:

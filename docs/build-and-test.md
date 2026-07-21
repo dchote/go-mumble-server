@@ -2,7 +2,7 @@
 
 ## Prerequisites
 
-- **Go 1.24+** (1.25 used in development)
+- **Go 1.25+** (CI, Docker, and goreleaser-cross use Go 1.25)
 - **CGO enabled** — required for SQLite (GORM driver)
 - **Node.js 20+ and Yarn** — only for full builds with embedded frontend
 
@@ -148,7 +148,7 @@ Use the same commands locally to catch CI failures.
 - On Linux CI, install `libsqlite3-dev` before building
 - On macOS, Xcode Command Line Tools usually provide what's needed
 
-### go.mod version mismatch
+### Go version mismatch
 
-- `go.mod` may specify Go 1.25; CI may use 1.24
-- Use `go version` to confirm local Go; tests and build work with 1.24+
+- Use Go 1.25+ locally to match CI, Docker (`golang:1.25-bookworm`), and goreleaser-cross (`v1.25.9`)
+- Confirm with `go version`

@@ -241,7 +241,7 @@ function permNames(value) {
 }
 
 function normalizeACL(a) {
-  const { selectorType, ...rest } = a
+  const { selectorType: _selectorType, ...rest } = a
   return rest
 }
 

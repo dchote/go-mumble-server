@@ -7,7 +7,7 @@ RUN yarn install --frozen-lockfile
 COPY frontend/ ./
 RUN yarn build
 
-FROM golang:1.24-bookworm AS builder
+FROM golang:1.25-bookworm AS builder
 WORKDIR /app
 
 ENV CGO_ENABLED=1
