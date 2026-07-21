@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.3
+
+- Set Home Assistant add-on maintainer and image author/url metadata to Daniel Chote
+
 ## 0.1.2
 
 - Dependency and toolchain maintenance (Go modules, frontend packages, Go 1.25 alignment)
