@@ -4,6 +4,8 @@ go-mumble-server
 !addon/rootfs/**
 test-client
 dist/
+dist-amd64/
+dist-arm64/
 
 # Go
 *.exe
