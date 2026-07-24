@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.4
+
+- Fix UserState proto2 field presence so Mumla/Plumble can unmute after self-mute
+- Align mute/deaf cascade and Suppress sync with murmur; harden voice-path locking
+
 ## 0.1.3
 
 - Set Home Assistant add-on maintainer and image author/url metadata to Daniel Chote
