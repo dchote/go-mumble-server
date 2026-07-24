@@ -432,6 +432,7 @@ On first start, the TOML/env/flag values seed both tables. Subsequent changes ar
 - [Security Modes](protocol/security-modes.md) — Per-client negotiated crypto tiers and mixed-mode enforcement
 - [Encryption](protocol/encryption.md) — TLS, AEAD ciphers, password hashing
 - [Permissions](protocol/permissions.md) — Permission bitmask definitions
+- [0007: UserState field presence](features/0007-userstate-field-presence.md) — Proto2 has-bits, mute/deaf cascade, Mumla/Plumble unmute fix
 
 ### Patterns
 

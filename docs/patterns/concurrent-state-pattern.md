@@ -109,6 +109,7 @@ Audio routing is the hottest path. To minimize lock contention:
 1. The UDP goroutine holds a read lock only for the duration of recipient lookup (reading channel membership and links).
 2. Actual packet encryption and sendto happen outside the lock.
 3. Channel links and user lists are stored in maps that allow concurrent read access under `RLock`.
+4. Prefer `user.Manager.SpeakGateFor`, `VoiceState`, and `ChannelID` over `GetUser` on the voice path. `GetUser` returns a live pointer after releasing the lock; the control goroutine may mutate it concurrently. `Snapshot` / `UpdateUser` return **deep** copies (including texture / tokens) for safe use after the lock is released.
 
 ### Avoiding Deadlocks
 

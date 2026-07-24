@@ -145,9 +145,21 @@ User disconnected or was kicked/banned.
 
 ### Type 9 — UserState
 
-Full or partial user state.
+Full or partial user state. `Mumble.proto` is **proto2**: every field has explicit
+presence. An assigned `false` is written to the wire; absent means "unchanged /
+unknown". The hand-written encoder uses `SetFields` has-bits so explicit defaults
+survive `Marshal` — see [protocol-encoding.md](../architecture/protocol-encoding.md)
+and [0007-userstate-field-presence.md](../features/0007-userstate-field-presence.md).
 
-**Wire format:** `session` and `channel_id` are always sent during sync (users in root have `channel_id` 0).
+**Wire format:** Server snapshots set presence bits for `session`, `channel_id`
+(including root = 0), and all voice flags (`mute`, `deaf`, `suppress`,
+`self_mute`, `self_deaf`, `priority_speaker`, `recording`) so cleared flags remain
+visible to echo-driven clients (Mumla, Plumble). Client mute toggles typically omit
+`session` and `channel_id` to mean “self / unchanged”.
+
+**Cascade (murmur parity):** deafened implies muted. Setting `self_deaf`/`deaf` to
+true forces the matching mute flag; clearing mute clears deaf; clearing deaf alone
+leaves mute set. Clients that want "unmute on undeaf" must send both fields.
 
 | Field | Type | Description |
 |-------|------|-------------|
@@ -156,20 +168,20 @@ Full or partial user state.
 | `name` | string | Username |
 | `user_id` | uint32 | Registered user ID |
 | `channel_id` | uint32 | Current channel (always sent; root = 0) |
-| `mute` | bool | Server-muted |
-| `deaf` | bool | Server-deafened |
-| `suppress` | bool | Suppressed (no speak permission) |
-| `self_mute` | bool | Self-muted |
-| `self_deaf` | bool | Self-deafened |
+| `mute` | bool | Server-muted (requires MuteDeafen to set) |
+| `deaf` | bool | Server-deafened (requires MuteDeafen; implies mute) |
+| `suppress` | bool | Suppressed (mirrors lack of Speak ACL; clients may only clear) |
+| `self_mute` | bool | Self-muted (self only) |
+| `self_deaf` | bool | Self-deafened (self only; implies self_mute) |
 | `texture` | bytes | User avatar |
-| `plugin_context` | bytes | Plugin positional audio context |
-| `plugin_identity` | string | Plugin identity |
+| `plugin_context` | bytes | Plugin positional audio context (not rebroadcast) |
+| `plugin_identity` | string | Plugin identity (not rebroadcast) |
 | `comment` | string | User comment (HTML) |
 | `hash` | string | Certificate hash |
 | `comment_hash` | bytes | SHA-1 hash of comment |
 | `texture_hash` | bytes | SHA-1 hash of texture |
-| `priority_speaker` | bool | Priority speaker flag |
-| `recording` | bool | Currently recording |
+| `priority_speaker` | bool | Priority speaker flag (cleared on channel switch) |
+| `recording` | bool | Currently recording (self only; announced via TextMessage) |
 | `temporary_access_tokens` | string[] | Additional access tokens |
 | `listening_channel_add` | uint32[] | Channels to start listening to |
 | `listening_channel_remove` | uint32[] | Channels to stop listening to |

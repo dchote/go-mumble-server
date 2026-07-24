@@ -1,17 +1,29 @@
 package mumble
 
+// VoiceState holds the flags that gate audio routing for a session. These are
+// written from the control (TCP) goroutine and read from the voice (UDP) goroutine,
+// so they are grouped to be copied as a unit under the user manager's lock.
+type VoiceState struct {
+	// Mute, Deaf and Suppress are imposed by the server or an administrator.
+	Mute     bool
+	Deaf     bool
+	Suppress bool
+	// SelfMute and SelfDeaf are requested by the client. SelfDeaf implies SelfMute.
+	SelfMute bool
+	SelfDeaf bool
+
+	PrioritySpeaker bool
+	Recording       bool
+}
+
 // User represents a connected Mumble user (client session).
 type User struct {
-	SessionID      uint32
-	UserID         uint32
-	ChannelID      uint32
-	Name           string
-	AccessTokens   []string // from Authenticate message, for token groups
-	Mute           bool
-	Deaf           bool
-	Suppress       bool
-	SelfMute       bool
-	SelfDeaf       bool
+	SessionID    uint32
+	UserID       uint32
+	ChannelID    uint32
+	Name         string
+	AccessTokens []string // from Authenticate message, for token groups
+	VoiceState
 	PluginIdentity string
 	PluginContext  []byte
 	Texture        []byte
