@@ -7,24 +7,33 @@ import (
 	"gorm.io/gorm"
 )
 
+// SpeakGate is the minimum state the voice path needs to decide whether a
+// session may send audio and which channel it occupies. Copied under the
+// manager lock so the UDP goroutine never reads through an unprotected pointer.
+type SpeakGate struct {
+	mumble.VoiceState
+	UserID    uint32
+	ChannelID uint32
+}
+
 // Manager tracks connected Mumble user sessions.
 type Manager struct {
-	mu       sync.RWMutex
+	mu        sync.RWMutex
 	bySession map[uint32]*mumble.User
-	byName   map[string]*mumble.User
-	pool     *sessionPool
-	db       *gorm.DB
-	maxUsers int
+	byName    map[string]*mumble.User
+	pool      *sessionPool
+	db        *gorm.DB
+	maxUsers  int
 }
 
 // NewManager creates a UserManager.
 func NewManager(db *gorm.DB, maxUsers int) *Manager {
 	return &Manager{
 		bySession: make(map[uint32]*mumble.User),
-		byName:   make(map[string]*mumble.User),
-		pool:     newSessionPool(maxUsers * 2),
-		db:       db,
-		maxUsers: maxUsers,
+		byName:    make(map[string]*mumble.User),
+		pool:      newSessionPool(maxUsers * 2),
+		db:        db,
+		maxUsers:  maxUsers,
 	}
 }
 
@@ -129,6 +138,82 @@ func (m *Manager) SetPing(sessionID uint32, ping float32) {
 	if u := m.bySession[sessionID]; u != nil {
 		u.Ping = ping
 	}
+}
+
+// Snapshot returns a deep copy of a user's record. Slice fields (texture, plugin
+// context, access tokens) are cloned so later mutations of the live user cannot
+// race with readers that hold the copy. Prefer this over GetUser for any read that
+// outlives the manager lock.
+func (m *Manager) Snapshot(sessionID uint32) (mumble.User, bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	u := m.bySession[sessionID]
+	if u == nil {
+		return mumble.User{}, false
+	}
+	return cloneUser(u), true
+}
+
+// VoiceState returns a copy of a user's audio-routing flags. Used on the per-packet
+// voice path, where copying the whole user record would be wasteful.
+func (m *Manager) VoiceState(sessionID uint32) (mumble.VoiceState, bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	u := m.bySession[sessionID]
+	if u == nil {
+		return mumble.VoiceState{}, false
+	}
+	return u.VoiceState, true
+}
+
+// SpeakGateFor returns the lean voice-path view of a session (flags + ACL keys).
+func (m *Manager) SpeakGateFor(sessionID uint32) (SpeakGate, bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	u := m.bySession[sessionID]
+	if u == nil {
+		return SpeakGate{}, false
+	}
+	return SpeakGate{VoiceState: u.VoiceState, UserID: u.UserID, ChannelID: u.ChannelID}, true
+}
+
+// ChannelID returns a user's current channel under the read lock.
+func (m *Manager) ChannelID(sessionID uint32) (uint32, bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	u := m.bySession[sessionID]
+	if u == nil {
+		return 0, false
+	}
+	return u.ChannelID, true
+}
+
+// UpdateUser applies fn to a user's record under the write lock and returns a deep
+// copy of the resulting state, so callers can broadcast it without racing further
+// edits of the live record.
+func (m *Manager) UpdateUser(sessionID uint32, fn func(*mumble.User)) (mumble.User, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	u := m.bySession[sessionID]
+	if u == nil {
+		return mumble.User{}, false
+	}
+	fn(u)
+	return cloneUser(u), true
+}
+
+func cloneUser(u *mumble.User) mumble.User {
+	out := *u
+	if u.Texture != nil {
+		out.Texture = append([]byte(nil), u.Texture...)
+	}
+	if u.PluginContext != nil {
+		out.PluginContext = append([]byte(nil), u.PluginContext...)
+	}
+	if u.AccessTokens != nil {
+		out.AccessTokens = append([]string(nil), u.AccessTokens...)
+	}
+	return out
 }
 
 // SetChannel updates a user's channel.

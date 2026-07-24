@@ -397,7 +397,10 @@ go-mumble-server is compatible with any client implementing the standard Mumble 
 
 - [Mumble](https://www.mumble.info/) (Desktop — Windows, macOS, Linux)
 - [Mumla](https://f-droid.org/packages/se.lublin.mumla/) (Android, F-Droid)
+- Plumble and other echo-driven Android clients (proto2 field presence on mute/deaf clears)
 - Custom Go clients built on `pkg/mumble/`
+
+See [docs/features/0007-userstate-field-presence.md](docs/features/0007-userstate-field-presence.md) for mute/deaf wire semantics.
 
 ## License
 

@@ -78,127 +78,145 @@ func (m *UserRemove) Unmarshal(data []byte) error {
 
 // UserState.VolumeAdjustment
 type VolumeAdjustment struct {
-	ListeningChannel   uint32
-	VolumeAdjustment   float32
+	ListeningChannel uint32
+	VolumeAdjustment float32
 }
 
-// UserState field presence bits (which fields were present in the wire data).
+// UserState field presence bits ("has bits"). Mumble.proto is proto2, where every
+// UserState field is optional with explicit presence: an explicitly assigned false
+// or zero is still written to the wire, and absent is distinct from default. These
+// bits carry that presence in both directions - Unmarshal records which fields the
+// peer sent, and Marshal uses them to emit explicitly-set defaults.
 const (
-	UserStateSetSession   uint32 = 1 << 0
-	UserStateSetActor     uint32 = 1 << 1
-	UserStateSetName      uint32 = 1 << 2
-	UserStateSetUserID    uint32 = 1 << 3
-	UserStateSetChannelID uint32 = 1 << 4
-	UserStateSetMute      uint32 = 1 << 5
-	UserStateSetDeaf      uint32 = 1 << 6
-	UserStateSetSuppress  uint32 = 1 << 7
-	UserStateSetSelfMute  uint32 = 1 << 8
-	UserStateSetSelfDeaf  uint32 = 1 << 9
-	UserStateSetTexture   uint32 = 1 << 10
-	UserStateSetPluginContext  uint32 = 1 << 11
-	UserStateSetPluginIdentity uint32 = 1 << 12
-	UserStateSetComment   uint32 = 1 << 13
+	UserStateSetSession         uint32 = 1 << 0
+	UserStateSetActor           uint32 = 1 << 1
+	UserStateSetName            uint32 = 1 << 2
+	UserStateSetUserID          uint32 = 1 << 3
+	UserStateSetChannelID       uint32 = 1 << 4
+	UserStateSetMute            uint32 = 1 << 5
+	UserStateSetDeaf            uint32 = 1 << 6
+	UserStateSetSuppress        uint32 = 1 << 7
+	UserStateSetSelfMute        uint32 = 1 << 8
+	UserStateSetSelfDeaf        uint32 = 1 << 9
+	UserStateSetTexture         uint32 = 1 << 10
+	UserStateSetPluginContext   uint32 = 1 << 11
+	UserStateSetPluginIdentity  uint32 = 1 << 12
+	UserStateSetComment         uint32 = 1 << 13
+	UserStateSetHash            uint32 = 1 << 14
+	UserStateSetCommentHash     uint32 = 1 << 15
+	UserStateSetTextureHash     uint32 = 1 << 16
+	UserStateSetPrioritySpeaker uint32 = 1 << 17
+	UserStateSetRecording       uint32 = 1 << 18
 )
+
+// UserStateVoiceFields is the set of presence bits for the flags that gate audio
+// routing. Broadcasts of authoritative user state set all of them so that clients
+// which key off field presence (rather than tracking state locally) always receive
+// an unambiguous value, including when a flag is cleared.
+const UserStateVoiceFields = UserStateSetMute | UserStateSetDeaf | UserStateSetSuppress |
+	UserStateSetSelfMute | UserStateSetSelfDeaf | UserStateSetPrioritySpeaker |
+	UserStateSetRecording
 
 // UserState (type 9).
 type UserState struct {
-	Session                  uint32
-	Actor                    uint32
-	Name                     string
-	UserID                   uint32
-	ChannelID                uint32
-	Mute                     bool
-	Deaf                     bool
-	Suppress                 bool
-	SelfMute                 bool
-	SelfDeaf                 bool
-	Texture                  []byte
-	PluginContext            []byte
-	PluginIdentity           string
-	Comment                  string
-	Hash                     string
-	CommentHash              []byte
-	TextureHash              []byte
-	PrioritySpeaker          bool
-	Recording                bool
-	TemporaryAccessTokens    []string
-	ListeningChannelAdd      []uint32
-	ListeningChannelRemove   []uint32
+	Session                   uint32
+	Actor                     uint32
+	Name                      string
+	UserID                    uint32
+	ChannelID                 uint32
+	Mute                      bool
+	Deaf                      bool
+	Suppress                  bool
+	SelfMute                  bool
+	SelfDeaf                  bool
+	Texture                   []byte
+	PluginContext             []byte
+	PluginIdentity            string
+	Comment                   string
+	Hash                      string
+	CommentHash               []byte
+	TextureHash               []byte
+	PrioritySpeaker           bool
+	Recording                 bool
+	TemporaryAccessTokens     []string
+	ListeningChannelAdd       []uint32
+	ListeningChannelRemove    []uint32
 	ListeningVolumeAdjustment []VolumeAdjustment
 
-	// SetFields indicates which fields were present in the wire data during Unmarshal.
-	// Used by handlers to avoid overwriting with default zero values.
+	// SetFields carries proto2 field presence. See the UserStateSet* bits.
 	SetFields uint32
+}
+
+// Has reports whether the given presence bit is set.
+func (m *UserState) Has(bit uint32) bool { return m.SetFields&bit != 0 }
+
+// appendBool writes a proto2 optional bool. The field is emitted when its presence
+// bit is set (so an explicit false reaches the peer) or when the value is true.
+func (m *UserState) appendBool(b []byte, field int, bit uint32, v bool) []byte {
+	if !m.Has(bit) && !v {
+		return b
+	}
+	b = wire.AppendTag(b, field, wire.WireVarint)
+	if v {
+		return wire.AppendVarint(b, 1)
+	}
+	return wire.AppendVarint(b, 0)
 }
 
 func (m *UserState) Marshal() ([]byte, error) {
 	var b []byte
-	// Always write session (required)
-	b = wire.AppendTag(b, 1, wire.WireVarint)
-	b = wire.AppendVarint(b, uint64(m.Session))
-	if m.Actor != 0 {
+	// Session uses presence like other proto2 fields. Server snapshots set the
+	// Session has-bit (see userToState). Client-originated mute toggles often omit
+	// session entirely to mean "self"; always writing session=0 would mis-target them.
+	if m.Has(UserStateSetSession) || m.Session != 0 {
+		b = wire.AppendTag(b, 1, wire.WireVarint)
+		b = wire.AppendVarint(b, uint64(m.Session))
+	}
+	if m.Has(UserStateSetActor) || m.Actor != 0 {
 		b = wire.AppendTag(b, 2, wire.WireVarint)
 		b = wire.AppendVarint(b, uint64(m.Actor))
 	}
-	if m.Name != "" {
+	if m.Has(UserStateSetName) || m.Name != "" {
 		b = wire.AppendString(b, 3, m.Name)
 	}
-	if m.UserID != 0 {
+	if m.Has(UserStateSetUserID) || m.UserID != 0 {
 		b = wire.AppendTag(b, 4, wire.WireVarint)
 		b = wire.AppendVarint(b, uint64(m.UserID))
 	}
-	// Always write channel_id (users in root have channel_id=0)
-	b = wire.AppendTag(b, 5, wire.WireVarint)
-	b = wire.AppendVarint(b, uint64(m.ChannelID))
-	if m.Mute {
-		b = wire.AppendTag(b, 6, wire.WireVarint)
-		b = wire.AppendVarint(b, 1)
+	// channel_id 0 is a real value (root). Server snapshots set the ChannelID
+	// has-bit; client mute toggles omit channel_id entirely.
+	if m.Has(UserStateSetChannelID) || m.ChannelID != 0 {
+		b = wire.AppendTag(b, 5, wire.WireVarint)
+		b = wire.AppendVarint(b, uint64(m.ChannelID))
 	}
-	if m.Deaf {
-		b = wire.AppendTag(b, 7, wire.WireVarint)
-		b = wire.AppendVarint(b, 1)
-	}
-	if m.Suppress {
-		b = wire.AppendTag(b, 8, wire.WireVarint)
-		b = wire.AppendVarint(b, 1)
-	}
-	if m.SelfMute {
-		b = wire.AppendTag(b, 9, wire.WireVarint)
-		b = wire.AppendVarint(b, 1)
-	}
-	if m.SelfDeaf {
-		b = wire.AppendTag(b, 10, wire.WireVarint)
-		b = wire.AppendVarint(b, 1)
-	}
-	if len(m.Texture) > 0 {
+	b = m.appendBool(b, 6, UserStateSetMute, m.Mute)
+	b = m.appendBool(b, 7, UserStateSetDeaf, m.Deaf)
+	b = m.appendBool(b, 8, UserStateSetSuppress, m.Suppress)
+	b = m.appendBool(b, 9, UserStateSetSelfMute, m.SelfMute)
+	b = m.appendBool(b, 10, UserStateSetSelfDeaf, m.SelfDeaf)
+	if m.Has(UserStateSetTexture) || len(m.Texture) > 0 {
 		b = wire.AppendBytes(b, 11, m.Texture)
 	}
-	if len(m.PluginContext) > 0 {
+	if m.Has(UserStateSetPluginContext) || len(m.PluginContext) > 0 {
 		b = wire.AppendBytes(b, 12, m.PluginContext)
 	}
-	if m.PluginIdentity != "" {
+	if m.Has(UserStateSetPluginIdentity) || m.PluginIdentity != "" {
 		b = wire.AppendString(b, 13, m.PluginIdentity)
 	}
-	if m.Comment != "" {
+	if m.Has(UserStateSetComment) || m.Comment != "" {
 		b = wire.AppendString(b, 14, m.Comment)
 	}
-	if m.Hash != "" {
+	if m.Has(UserStateSetHash) || m.Hash != "" {
 		b = wire.AppendString(b, 15, m.Hash)
 	}
-	if len(m.CommentHash) > 0 {
+	if m.Has(UserStateSetCommentHash) || len(m.CommentHash) > 0 {
 		b = wire.AppendBytes(b, 16, m.CommentHash)
 	}
-	if len(m.TextureHash) > 0 {
+	if m.Has(UserStateSetTextureHash) || len(m.TextureHash) > 0 {
 		b = wire.AppendBytes(b, 17, m.TextureHash)
 	}
-	if m.PrioritySpeaker {
-		b = wire.AppendTag(b, 18, wire.WireVarint)
-		b = wire.AppendVarint(b, 1)
-	}
-	if m.Recording {
-		b = wire.AppendTag(b, 19, wire.WireVarint)
-		b = wire.AppendVarint(b, 1)
-	}
+	b = m.appendBool(b, 18, UserStateSetPrioritySpeaker, m.PrioritySpeaker)
+	b = m.appendBool(b, 19, UserStateSetRecording, m.Recording)
 	for _, t := range m.TemporaryAccessTokens {
 		b = wire.AppendString(b, 20, t)
 	}
@@ -355,6 +373,7 @@ func (m *UserState) Unmarshal(data []byte) error {
 			}
 			b = b[n:]
 			m.Hash = string(s)
+			m.SetFields |= UserStateSetHash
 		case 16:
 			bb, n, err := wire.ReadLengthDelimited(b)
 			if err != nil {
@@ -362,6 +381,7 @@ func (m *UserState) Unmarshal(data []byte) error {
 			}
 			b = b[n:]
 			m.CommentHash = bb
+			m.SetFields |= UserStateSetCommentHash
 		case 17:
 			bb, n, err := wire.ReadLengthDelimited(b)
 			if err != nil {
@@ -369,6 +389,7 @@ func (m *UserState) Unmarshal(data []byte) error {
 			}
 			b = b[n:]
 			m.TextureHash = bb
+			m.SetFields |= UserStateSetTextureHash
 		case 18:
 			v, n, err := wire.ReadVarint(b)
 			if err != nil {
@@ -376,6 +397,7 @@ func (m *UserState) Unmarshal(data []byte) error {
 			}
 			b = b[n:]
 			m.PrioritySpeaker = v != 0
+			m.SetFields |= UserStateSetPrioritySpeaker
 		case 19:
 			v, n, err := wire.ReadVarint(b)
 			if err != nil {
@@ -383,6 +405,7 @@ func (m *UserState) Unmarshal(data []byte) error {
 			}
 			b = b[n:]
 			m.Recording = v != 0
+			m.SetFields |= UserStateSetRecording
 		case 20:
 			s, n, err := wire.ReadLengthDelimited(b)
 			if err != nil {

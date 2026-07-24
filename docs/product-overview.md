@@ -112,6 +112,7 @@ go-mumble-server targets full compatibility with the Mumble protocol as defined 
 - **Voice channel** — UDP with AEAD encryption, or tunneled over TCP
 - **Per-client negotiation** — Legacy (default), secure, or lite; standard Mumble clients use legacy automatically
 - **Version negotiation** — Supports protocol version exchange and codec negotiation (Opus preferred, CELT fallback)
+- **Proto2 field presence** — Outgoing `UserState` voice flags encode explicit `false` values so echo-driven clients (Mumla, Plumble) can unmute; mute/deaf cascade matches murmur ([0007](features/0007-userstate-field-presence.md))
 
 ## Target Users
 
