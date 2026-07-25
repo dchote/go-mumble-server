@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.0
+
+- Restore Murmur-shaped UserState snapshot vs delta-echo so Mumla/Plumble unmute without official-client spam ([#1](https://github.com/dchote/go-mumble-server/issues/1))
+- Keep root at channel ID 0, omit root parent on the wire, announce parents before children (Mumla/Humla mid-sync disconnect)
+- Session-keyed ACL subjects, authorization/content limits, schema lint, and CI/`make check` hygiene
+- Breaking: remove unused public `pkg/mumble` type stubs (ACL/Ban/VoiceTarget/TextMessage/Version); wire types live in `protocol/messages`
+
 ## 0.1.4
 
 - Fix UserState proto2 field presence so Mumla/Plumble can unmute after self-mute
