@@ -146,36 +146,60 @@ User disconnected or was kicked/banned.
 ### Type 9 — UserState
 
 Full or partial user state. `Mumble.proto` is **proto2**: every field has explicit
-presence. An assigned `false` is written to the wire; absent means "unchanged /
-unknown". The hand-written encoder uses `SetFields` has-bits so explicit defaults
-survive `Marshal` — see [protocol-encoding.md](../architecture/protocol-encoding.md)
-and [0007-userstate-field-presence.md](../features/0007-userstate-field-presence.md).
+presence — a field that was *assigned* (even to its zero value) is written to the
+wire, and "absent" is a distinct state from "false". But presence is not the same
+thing as "always send every field": Murmur only ever sends the fields that are
+actually relevant to a given message, and clients treat a field's mere presence in
+`UserState` as a discrete change notification, not as a full state refresh. See
+[protocol-encoding.md](../architecture/protocol-encoding.md) and
+[0007-userstate-field-presence.md](../features/0007-userstate-field-presence.md)
+for the full rationale and the regression that motivated it.
 
-**Wire format:** Server snapshots set presence bits for `session`, `channel_id`
-(including root = 0), and all voice flags (`mute`, `deaf`, `suppress`,
-`self_mute`, `self_deaf`, `priority_speaker`, `recording`) so cleared flags remain
-visible to echo-driven clients (Mumla, Plumble). Client mute toggles typically omit
-`session` and `channel_id` to mean “self / unchanged”.
+This server sends `UserState` in two distinct shapes, matching Murmur:
+
+- **Snapshot** (`userToState`, sent once per user during login sync / when a new
+  user joins): only *true* voice flags are included. `deaf`/`mute` and
+  `self_deaf`/`self_mute` are mutually exclusive on the wire — e.g. a deafened
+  user's snapshot carries `deaf=true` but omits `mute`, since deaf already implies
+  mute. `session` and `channel_id` are always present (root = 0 is a real value,
+  not absence).
+- **Delta echo** (`handleUserState`, sent in response to a client's own `UserState`
+  or a server-side cascade such as a mute-by-admin or ACL change): only the fields
+  the client explicitly sent, plus any fields the server's cascade logic
+  synthesized (e.g. unmuting synthesizes an explicit `self_deaf=false` if the user
+  was deafened), are echoed back. Untouched fields — including unrelated voice
+  flags — are omitted, not re-sent as `false`.
+
+Sending every voice flag (including `false` ones) on every broadcast was tried and
+reverted: the official client treats each explicitly-present field as a discrete
+event, so observers would log a burst of spurious "Muted." / "Recording stopped" /
+etc. messages (including on Mumla join announces). Mumla/Humla need the unmute
+echo to carry explicit `self_mute`/`self_deaf` presence, but they do not
+rebroadcast the server's full `UserState` — see
+[0007-userstate-field-presence.md](../features/0007-userstate-field-presence.md).
 
 **Cascade (murmur parity):** deafened implies muted. Setting `self_deaf`/`deaf` to
 true forces the matching mute flag; clearing mute clears deaf; clearing deaf alone
-leaves mute set. Clients that want "unmute on undeaf" must send both fields.
+leaves mute set. Clients that want "unmute on undeaf" must send both fields
+(Mumla's UI already does). The cascade logic mutates the inbound `UserState`
+message in place (setting the synthesized field's value and its `SetFields`
+presence bit) so the same message that is validated is the one broadcast.
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `session` | uint32 | User session ID (always sent) |
-| `actor` | uint32 | Session of the user making changes |
+| `session` | uint32 | User session ID (always present on snapshots and server echoes) |
+| `actor` | uint32 | Session of the user making changes (delta echoes) |
 | `name` | string | Username |
 | `user_id` | uint32 | Registered user ID |
-| `channel_id` | uint32 | Current channel (always sent; root = 0) |
+| `channel_id` | uint32 | Current channel (always present on **snapshots**, including root = 0; omitted from mute-toggle **deltas** unless a move was requested) |
 | `mute` | bool | Server-muted (requires MuteDeafen to set) |
 | `deaf` | bool | Server-deafened (requires MuteDeafen; implies mute) |
 | `suppress` | bool | Suppressed (mirrors lack of Speak ACL; clients may only clear) |
 | `self_mute` | bool | Self-muted (self only) |
 | `self_deaf` | bool | Self-deafened (self only; implies self_mute) |
 | `texture` | bytes | User avatar |
-| `plugin_context` | bytes | Plugin positional audio context (not rebroadcast) |
-| `plugin_identity` | string | Plugin identity (not rebroadcast) |
+| `plugin_context` | bytes | Plugin positional audio context (applied server-side; never broadcast — a plugin-only message is a no-op on the wire) |
+| `plugin_identity` | string | Plugin identity (applied server-side; never broadcast) |
 | `comment` | string | User comment (HTML) |
 | `hash` | string | Certificate hash |
 | `comment_hash` | bytes | SHA-1 hash of comment |
@@ -411,3 +435,13 @@ Plugin data relay between clients.
 
 - Protobuf source: `research/mumble/src/Mumble.proto`
 - gumble handler table: `research/gumble/gumble/handlers.go`
+
+## Schema conformance
+
+`pkg/mumble/protocol/messages/schema_lint_test.go` cross-checks every message
+struct in this catalog against a vendored copy of the upstream schema
+(`pkg/mumble/protocol/messages/testdata/Mumble.proto`): every implemented Go
+field must map to a real proto field at the right number and wire type, every
+proto field we don't implement must be an explicitly tracked gap, and every
+`Marshal()` is probed byte-for-byte to confirm it actually emits what the
+mapping claims. See [protocol-encoding.md](../architecture/protocol-encoding.md#schema-conformance-lint).

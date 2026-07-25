@@ -30,14 +30,14 @@ import (
 
 // Server represents the Mumble server (virtual server or Meta).
 type Server struct {
-	cfg    *config.Config
-	db     *gorm.DB
-	feFS   fs.FS
-	mu     sync.Mutex
-	http   *http.Server
-	tcpLn  interface{ Close() error }
+	cfg     *config.Config
+	db      *gorm.DB
+	feFS    fs.FS
+	mu      sync.Mutex
+	http    *http.Server
+	tcpLn   interface{ Close() error }
 	udpConn interface{ Close() error }
-	mdns   *discovery.Server
+	mdns    *discovery.Server
 }
 
 // New creates a new Server.
@@ -138,6 +138,7 @@ func (s *Server) Start(ctx context.Context) error {
 			return
 		}
 		ms.SetVoiceDebug(serverCfg.VoiceDebug)
+		ms.SetContentPolicy(serverCfg.AllowRecording, serverCfg.MaxTextMessageLength, serverCfg.MaxImageMessageLength)
 	}
 	handler := rest.RouterWithMumble(s.db, cfg, s.feFS, &rest.MumbleUserAdapter{Manager: ms.UserManager(), Server: ms}, &rest.MumbleUserActionAdapter{Server: ms, ServerID: 1}, &rest.MumbleChannelCryptoAdapter{Server: ms, ServerID: 1}, getChanMgr, onACLChange, onBanChange, onChannelMutated, onConfigChange)
 	s.http = &http.Server{
@@ -203,15 +204,15 @@ func (s *Server) acceptLoop(ctx context.Context, ln net.Listener, ms *mumble.Ser
 		conn := connection.New(raw, crypt, func(c *connection.Conn) {
 			sid := c.SessionID()
 			name := c.UserName()
-			u := ms.UserManager().Remove(sid)
+			u, removed := ms.UserManager().Remove(sid)
 			ms.UnregisterConn(sid)
-			if u != nil && u.ChannelID != 0 {
+			if removed && u.ChannelID != 0 {
 				ms.UpdateChannelCrypto(u.ChannelID)
 			}
 			ms.Broadcast(sid, protocol.MessageUserRemove, &messages.UserRemove{Session: sid, Actor: 0})
-			if name != "" || u != nil {
+			if name != "" || removed {
 				n := name
-				if u != nil {
+				if removed {
 					n = u.Name
 				}
 				slog.Info("Mumble client disconnected", "remote", remoteAddr, "session", sid, "user", n)
@@ -230,7 +231,6 @@ func (s *Server) acceptLoop(ctx context.Context, ln net.Listener, ms *mumble.Ser
 		}()
 	}
 }
-
 
 func (s *Server) udpReadLoop(ctx context.Context, conn net.PacketConn, ms *mumble.Server) error {
 	buf := make([]byte, 65535)

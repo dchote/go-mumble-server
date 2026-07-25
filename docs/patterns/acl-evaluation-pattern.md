@@ -52,11 +52,13 @@ Each ACL entry maps a user or group to a set of granted and denied permissions:
 
 ### Inheritance
 
-Channels inherit ACLs from their parent unless `InheritACL` is set to false. When inheriting:
+`InheritACL` is a property of the *child* side of a link: it says whether this channel takes its parent's ACLs. Building the chain for channel C therefore means walking up from C and stopping at the first channel that does not inherit — that channel's own entries still count, its ancestors' do not.
 
-1. Start with the parent channel's effective ACL list.
-2. Append this channel's own ACL entries.
-3. Evaluate in order — later entries override earlier ones.
+1. Walk up from the target, collecting channels while each one inherits.
+2. Evaluate the collected entries outermost-first, so entries closer to the target are applied last and win.
+3. The walk always reaches root unless a channel on the way opted out, which is what makes root the place to put server-wide policy.
+
+Storing an entry with `ApplyHere` or `ApplySubs` set to false requires `acl.CreateACL`: both columns default to true in the schema, and GORM omits zero-valued fields with a default from an INSERT, so a plain `Create` silently widens the entry.
 
 ## Evaluation Algorithm
 
@@ -64,14 +66,16 @@ To determine permissions for user U in channel C:
 
 ```
 function evaluateACL(user, channel):
-    # Build the ACL chain from root to this channel
-    # Murmur baseline: all users start with these before ACL evaluation
-    granted = Traverse | Enter | Speak | Whisper | TextMessage | Listen
+    # Murmur baseline, plus the self-service permissions a registered or admin
+    # account always holds. This is the starting point whether or not any ACL
+    # exists, so adding the first ACL row cannot strip an admin of their rights.
+    granted = defaultPermissions(user)
+
+    # Build the ACL chain, nearest channel last
     chain = []
     current = channel
     while current != nil:
-        if current.InheritACL or current == channel:
-            prepend current.ACLs to chain
+        prepend current.ACLs to chain
         if not current.InheritACL:
             break
         current = current.Parent
@@ -136,12 +140,13 @@ See [protocol/permissions.md](../protocol/permissions.md) for the full bitmask d
 
 ## Caching
 
-ACL evaluation is called frequently (every message, every voice packet for permission checks). Results should be cached per (user, channel) pair and invalidated when:
+ACL evaluation is called frequently (every message, every voice packet for permission checks), so results are cached per (subject, channel) pair. A subject is `{SessionID, UserID}` (`acl.Subject`) rather than a bare user ID: every unregistered user has user ID 0, so keying on the account alone would make one guest's channel position and access tokens decide `@in`/`@out` and token-group answers for all of them. The evaluator resolves the live user record by session first and falls back to the user ID for callers that have no session yet, such as picking a landing channel during authentication.
 
-- A user moves channels
-- ACLs or groups are modified on any channel
-- A user connects or disconnects
-- Access tokens change
+Because `@in`/`@out` membership depends on where the user currently is, and token groups depend on the tokens a session presented, the whole cache is flushed whenever any of these happen:
+
+- A user moves channels, including the forced move when a channel is removed (`Server.invalidateACLCache`)
+- A client authenticates, bringing a channel and a set of access tokens
+- ACLs or groups are modified through the REST API (`onACLChange`)
 
 The original Murmur uses `ChanACL::ACLCache` (a per-server `QHash`) that is cleared on any ACL-affecting change.
 
@@ -177,7 +182,7 @@ Management API users (`users` table) can authenticate to Mumble with their web c
 
 ## Implementation
 
-- **Evaluator**: `internal/acl/evaluator.go` — `NewEvaluator(db, chans, users)`, `Check()`, `EffectivePermissions()`, `InvalidateCache()`
+- **Evaluator**: `internal/acl/evaluator.go` — `NewEvaluator(db, chans, users)`, `Check()`, `EffectivePermissions()`, `InvalidateCache()`; callers build subjects with `SubjectOf(user)` or `SubjectForUserID(id)`
 - **Seed**: `internal/acl/seed.go` — `EnsureDefaultRootACLs()` seeds default groups and ACLs for root channel
 - **Models**: `internal/database/models/channel_acl.go`, `channel_group.go`
 - **User**: `pkg/mumble/user.go` — `AccessTokens` for token group membership

@@ -33,6 +33,14 @@ type Config struct {
 	Bonjour        bool
 	RegisterName   string
 	VoiceDebug     bool
+	// AllowRecording mirrors murmur's allowRecording: when false a client that
+	// announces it started recording is disconnected instead of being relayed.
+	AllowRecording bool
+	// MaxTextMessageLength and MaxImageMessageLength bound user-supplied text and
+	// image payloads (chat messages, user comments, avatar textures), matching
+	// murmur's iMaxTextMessageLength / iMaxImageMessageLength. 0 means unlimited.
+	MaxTextMessageLength  int
+	MaxImageMessageLength int
 }
 
 // fileConfig mirrors the TOML structure for parsing.
@@ -88,6 +96,10 @@ func defaults() *Config {
 		MaxBandwidth:  72000,
 		ChannelDepth:  10,
 		ChannelCount:  1000,
+		// Murmur's defaults for the same settings.
+		AllowRecording:        true,
+		MaxTextMessageLength:  5000,
+		MaxImageMessageLength: 131072,
 	}
 }
 

@@ -28,9 +28,9 @@ type ConnectedUser struct {
 	ChannelID       uint32  `json:"channel_id"`
 	Address         string  `json:"address"`
 	Ping            float32 `json:"ping"`
-	CertificateHash string  `json:"certificate_hash,omitempty"`   // SHA-1 hex of client cert; empty if none
-	CryptoMode      string  `json:"crypto_mode,omitempty"`        // Negotiated UDP crypto tier: lite, legacy, secure
-	VoiceTransport  string  `json:"voice_transport,omitempty"`    // udp or tcp — whether client uses native UDP or TCP tunnel for voice
+	CertificateHash string  `json:"certificate_hash,omitempty"` // SHA-1 hex of client cert; empty if none
+	CryptoMode      string  `json:"crypto_mode,omitempty"`      // Negotiated UDP crypto tier: lite, legacy, secure
+	VoiceTransport  string  `json:"voice_transport,omitempty"`  // udp or tcp — whether client uses native UDP or TCP tunnel for voice
 	SelfMute        bool    `json:"self_mute"`
 	SelfDeaf        bool    `json:"self_deaf"`
 	Mute            bool    `json:"mute"`

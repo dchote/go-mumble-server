@@ -56,10 +56,10 @@ func (m *QueryUsers) Unmarshal(data []byte) error {
 
 // CodecVersion (type 21).
 type CodecVersion struct {
-	Alpha      int32
-	Beta       int32
+	Alpha       int32
+	Beta        int32
 	PreferAlpha bool
-	Opus       bool
+	Opus        bool
 }
 
 func (m *CodecVersion) Marshal() ([]byte, error) {
@@ -131,13 +131,13 @@ func (m *CodecVersion) Unmarshal(data []byte) error {
 
 // ServerConfig (type 24).
 type ServerConfig struct {
-	MaxBandwidth         uint32
-	WelcomeText          string
-	AllowHTML            bool
-	MessageLength        uint32
-	ImageMessageLength   uint32
-	MaxUsers             uint32
-	RecordingAllowed     bool
+	MaxBandwidth       uint32
+	WelcomeText        string
+	AllowHTML          bool
+	MessageLength      uint32
+	ImageMessageLength uint32
+	MaxUsers           uint32
+	RecordingAllowed   bool
 }
 
 func (m *ServerConfig) Marshal() ([]byte, error) {
@@ -573,9 +573,9 @@ func (m *ContextAction) Unmarshal(data []byte) error {
 
 // RequestBlob (type 23).
 type RequestBlob struct {
-	SessionTexture      []uint32
-	SessionComment      []uint32
-	ChannelDescription  []uint32
+	SessionTexture     []uint32
+	SessionComment     []uint32
+	ChannelDescription []uint32
 }
 
 func (m *RequestBlob) Marshal() ([]byte, error) {
@@ -715,10 +715,10 @@ func (m *SuggestConfig) Unmarshal(data []byte) error {
 
 // PluginDataTransmission (type 26).
 type PluginDataTransmission struct {
-	SenderSession     uint32
-	ReceiverSessions  []uint32
-	Data              []byte
-	DataID            string
+	SenderSession    uint32
+	ReceiverSessions []uint32
+	Data             []byte
+	DataID           string
 }
 
 func (m *PluginDataTransmission) Marshal() ([]byte, error) {

@@ -38,23 +38,24 @@ func (s *Uint32Slice) Scan(value interface{}) error {
 // Channel represents a Mumble channel in the channel tree.
 //
 // Root channel: The root (parent_id IS NULL) must have ID 0 per Mumble protocol.
-// When creating the root, use db.Select("ID", ...).Create() so GORM includes ID 0.
-// See docs/patterns/channel-tree-pattern.md.
+// GORM leaves a zero-valued primary key out of the INSERT even when it is named in
+// Select, so the root is always created through channel.Manager, which repairs the
+// auto-assigned ID afterwards. See docs/patterns/channel-tree-pattern.md.
 type Channel struct {
-	ID          uint         `gorm:"primaryKey" json:"id"`
-	ServerID    uint         `gorm:"index;not null" json:"server_id"`
-	ParentID    *uint        `gorm:"index" json:"parent_id"`
-	Parent      *Channel     `gorm:"foreignKey:ParentID" json:"-"`
-	Children    []Channel    `gorm:"foreignKey:ParentID" json:"-"`
-	Name        string       `gorm:"size:255;not null" json:"name"`
-	Description string       `gorm:"type:text" json:"description"`
-	Position    int32        `gorm:"not null;default:0" json:"position"`
-	MaxUsers    uint32       `gorm:"not null;default:0" json:"max_users"`
-	IsTemporary bool         `gorm:"not null;default:false" json:"is_temporary"`
-	InheritACL  bool         `gorm:"not null;default:true" json:"inherit_acl"`
-	Links       Uint32Slice  `gorm:"type:text" json:"links"` // JSON array of channel IDs
-	CreatedAt   int64        `gorm:"autoCreateTime" json:"created_at"`
-	UpdatedAt   int64        `gorm:"autoUpdateTime" json:"updated_at"`
+	ID          uint           `gorm:"primaryKey" json:"id"`
+	ServerID    uint           `gorm:"index;not null" json:"server_id"`
+	ParentID    *uint          `gorm:"index" json:"parent_id"`
+	Parent      *Channel       `gorm:"foreignKey:ParentID" json:"-"`
+	Children    []Channel      `gorm:"foreignKey:ParentID" json:"-"`
+	Name        string         `gorm:"size:255;not null" json:"name"`
+	Description string         `gorm:"type:text" json:"description"`
+	Position    int32          `gorm:"not null;default:0" json:"position"`
+	MaxUsers    uint32         `gorm:"not null;default:0" json:"max_users"`
+	IsTemporary bool           `gorm:"not null;default:false" json:"is_temporary"`
+	InheritACL  bool           `gorm:"not null;default:true" json:"inherit_acl"`
+	Links       Uint32Slice    `gorm:"type:text" json:"links"` // JSON array of channel IDs
+	CreatedAt   int64          `gorm:"autoCreateTime" json:"created_at"`
+	UpdatedAt   int64          `gorm:"autoUpdateTime" json:"updated_at"`
 	DeletedAt   gorm.DeletedAt `gorm:"index" json:"-"`
 }
 

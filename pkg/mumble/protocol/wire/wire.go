@@ -43,13 +43,6 @@ func AppendFixed32(b []byte, v uint32) []byte {
 	return append(b, buf[:]...)
 }
 
-// AppendFixed64 appends a little-endian uint64 (protobuf fixed64).
-func AppendFixed64(b []byte, v uint64) []byte {
-	var buf [8]byte
-	binary.LittleEndian.PutUint64(buf[:], v)
-	return append(b, buf[:]...)
-}
-
 // AppendBytes appends length-delimited bytes (field tag + length + data).
 func AppendBytes(b []byte, fieldNum int, data []byte) []byte {
 	b = AppendTag(b, fieldNum, WireLengthDelimited)
@@ -91,11 +84,6 @@ func ReadTag(b []byte) (fieldNum int, wireType int, n int, err error) {
 // ReadFixed32 reads a fixed32 from b. Caller must ensure len(b) >= 4.
 func ReadFixed32(b []byte) uint32 {
 	return binary.LittleEndian.Uint32(b[:4])
-}
-
-// ReadFixed64 reads a fixed64 from b. Caller must ensure len(b) >= 8.
-func ReadFixed64(b []byte) uint64 {
-	return binary.LittleEndian.Uint64(b[:8])
 }
 
 // SkipField skips a field based on wire type. Returns bytes consumed.

@@ -14,7 +14,7 @@ type VirtualServer struct {
 	Port        int            `gorm:"not null" json:"port"`
 	MaxUsers    int            `gorm:"not null;default:100" json:"max_users"`
 	WelcomeText string         `gorm:"type:text" json:"welcome_text"`
-	Password    string         `gorm:"size:255" json:"-"` // Server password (hashed or plain per config)
+	Password    string         `gorm:"size:255" json:"-"`  // Server password (hashed or plain per config)
 	CertPEM     string         `gorm:"type:text" json:"-"` // TLS certificate (PEM); not exposed via API
 	KeyPEM      string         `gorm:"type:text" json:"-"` // TLS private key (PEM); not exposed via API
 	CreatedAt   time.Time      `json:"created_at"`

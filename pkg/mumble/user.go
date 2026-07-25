@@ -37,4 +37,15 @@ type User struct {
 	CertHash string
 	// CryptoMode is the negotiated UDP crypto tier: "lite", "legacy", or "secure".
 	CryptoMode string
+	// IsSuperUser marks the connection that holds the reserved SuperUser identity.
+	// Murmur identifies SuperUser by the fixed account id 0, which this server cannot
+	// reuse because 0 also means "not registered" here, so the reserved username is
+	// the identity instead (see SuperUserName). SuperUser is immune to administrative
+	// UserState changes made by anybody else.
+	IsSuperUser bool
 }
+
+// SuperUserName is the reserved username carrying SuperUser status. Murmur reserves
+// the same name and requires the superuser password to claim it; this server grants
+// it only to a connection that authenticated as a registered or API user.
+const SuperUserName = "SuperUser"

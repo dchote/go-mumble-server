@@ -109,6 +109,15 @@ components:
         voice_debug:
           type: boolean
           description: Enable voice path debugging (verbose logs for UDP/TCP tunnel diagnosis)
+        allow_recording:
+          type: boolean
+          description: Allow clients to announce that they are recording. When false, a client that starts recording is disconnected.
+        max_text_message_length:
+          type: integer
+          description: Maximum length of a chat message or user comment, in bytes. 0 means unlimited.
+        max_image_message_length:
+          type: integer
+          description: Maximum size of an image message or user texture, in bytes. 0 means unlimited.
   securitySchemes:
     bearerAuth:
       type: http
@@ -341,6 +350,15 @@ paths:
                 voice_debug:
                   type: boolean
                   description: Enable voice path debugging (verbose logs for UDP/TCP tunnel diagnosis)
+                allow_recording:
+                  type: boolean
+                  description: Allow clients to announce that they are recording. When false, a client that starts recording is disconnected.
+                max_text_message_length:
+                  type: integer
+                  description: Maximum length of a chat message or user comment, in bytes. 0 means unlimited.
+                max_image_message_length:
+                  type: integer
+                  description: Maximum size of an image message or user texture, in bytes. 0 means unlimited.
       responses:
         '204':
           description: Updated

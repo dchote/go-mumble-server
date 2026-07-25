@@ -17,27 +17,27 @@ import (
 type Mode int
 
 const (
-	ModeLite   Mode = iota
+	ModeLite Mode = iota
 	ModeLegacy
 	ModeSecure
 )
 
 const (
-	legacyKeySize    = 16
-	legacyNonceSize  = 16
-	legacyTagSize    = 3
-	legacyOverhead   = 1 + legacyTagSize
-	secureKeySize    = 32
-	secureNonceSize  = 12
-	secureTagSize    = 16
-	secureOverhead   = secureNonceSize + secureTagSize
-	decryptHistory   = 256
+	legacyKeySize   = 16
+	legacyNonceSize = 16
+	legacyTagSize   = 3
+	legacyOverhead  = 1 + legacyTagSize
+	secureKeySize   = 32
+	secureNonceSize = 12
+	secureTagSize   = 16
+	secureOverhead  = secureNonceSize + secureTagSize
+	decryptHistory  = 256
 )
 
 var (
-	ErrDecryptFailed   = errors.New("crypto: decryption failed")
-	ErrInvalidPacket   = errors.New("crypto: invalid packet")
-	ErrReplayDetected  = errors.New("crypto: replay detected")
+	ErrDecryptFailed  = errors.New("crypto: decryption failed")
+	ErrInvalidPacket  = errors.New("crypto: invalid packet")
+	ErrReplayDetected = errors.New("crypto: replay detected")
 )
 
 // CryptState handles AEAD encryption/decryption of UDP voice packets.
@@ -45,21 +45,21 @@ type CryptState struct {
 	mode Mode
 
 	// Legacy (OCB2-AES128)
-	legacyBlock   cipher.Block
-	encNonce      [16]byte
-	decNonce      [16]byte
-	decHistory    [decryptHistory]byte
+	legacyBlock cipher.Block
+	encNonce    [16]byte
+	decNonce    [16]byte
+	decHistory  [decryptHistory]byte
 
 	// Secure (AES-256-GCM)
-	secureAEAD    cipher.AEAD
-	encCounter    uint64
-	decMax        uint64
-	decBitmap     [8]byte // 64 bits
+	secureAEAD cipher.AEAD
+	encCounter uint64
+	decMax     uint64
+	decBitmap  [8]byte // 64 bits
 
 	// Stats
-	Good  uint32
-	Late  uint32
-	Lost  uint32
+	Good   uint32
+	Late   uint32
+	Lost   uint32
 	Resync uint32
 }
 

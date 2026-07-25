@@ -221,14 +221,17 @@ func (h *ServerHandler) GetConfig(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"max_users":             sc.MaxUsers,
-		"max_bandwidth":         sc.MaxBandwidth,
-		"welcome_text":          sc.WelcomeText,
-		"default_channel":       sc.DefaultChannel,
-		"cert_required":         sc.CertRequired,
-		"channel_nesting_limit": sc.ChannelNestingLimit,
-		"channel_count_limit":   sc.ChannelCountLimit,
-		"voice_debug":           sc.VoiceDebug,
+		"max_users":                sc.MaxUsers,
+		"max_bandwidth":            sc.MaxBandwidth,
+		"welcome_text":             sc.WelcomeText,
+		"default_channel":          sc.DefaultChannel,
+		"cert_required":            sc.CertRequired,
+		"channel_nesting_limit":    sc.ChannelNestingLimit,
+		"channel_count_limit":      sc.ChannelCountLimit,
+		"voice_debug":              sc.VoiceDebug,
+		"allow_recording":          sc.AllowRecording,
+		"max_text_message_length":  sc.MaxTextMessageLength,
+		"max_image_message_length": sc.MaxImageMessageLength,
 	})
 }
 
@@ -241,14 +244,17 @@ func (h *ServerHandler) UpdateConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
-		MaxUsers            *int    `json:"max_users"`
-		MaxBandwidth        *int    `json:"max_bandwidth"`
-		WelcomeText         *string `json:"welcome_text"`
-		DefaultChannel      *int    `json:"default_channel"`
-		CertRequired        *bool   `json:"cert_required"`
-		ChannelNestingLimit *int    `json:"channel_nesting_limit"`
-		ChannelCountLimit   *int    `json:"channel_count_limit"`
-		VoiceDebug          *bool   `json:"voice_debug"`
+		MaxUsers              *int    `json:"max_users"`
+		MaxBandwidth          *int    `json:"max_bandwidth"`
+		WelcomeText           *string `json:"welcome_text"`
+		DefaultChannel        *int    `json:"default_channel"`
+		CertRequired          *bool   `json:"cert_required"`
+		ChannelNestingLimit   *int    `json:"channel_nesting_limit"`
+		ChannelCountLimit     *int    `json:"channel_count_limit"`
+		VoiceDebug            *bool   `json:"voice_debug"`
+		AllowRecording        *bool   `json:"allow_recording"`
+		MaxTextMessageLength  *int    `json:"max_text_message_length"`
+		MaxImageMessageLength *int    `json:"max_image_message_length"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		http.Error(w, `{"error":"invalid request body"}`, http.StatusBadRequest)
@@ -292,6 +298,15 @@ func (h *ServerHandler) UpdateConfig(w http.ResponseWriter, r *http.Request) {
 	if body.VoiceDebug != nil {
 		updates["voice_debug"] = *body.VoiceDebug
 	}
+	if body.AllowRecording != nil {
+		updates["allow_recording"] = *body.AllowRecording
+	}
+	if body.MaxTextMessageLength != nil {
+		updates["max_text_message_length"] = *body.MaxTextMessageLength
+	}
+	if body.MaxImageMessageLength != nil {
+		updates["max_image_message_length"] = *body.MaxImageMessageLength
+	}
 	if len(updates) > 0 {
 		if err := h.db.Model(&sc).Updates(updates).Error; err != nil {
 			http.Error(w, `{"error":"failed to update config"}`, http.StatusInternalServerError)
@@ -323,7 +338,7 @@ func (h *ServerHandler) GetMetaConfig(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"host": meta.Host,
+		"host":        meta.Host,
 		"mumble_port": meta.MumblePort, "rest_port": meta.RESTPort,
 		"bonjour": meta.Bonjour, "register_name": meta.RegisterName,
 	})
@@ -345,7 +360,7 @@ func (h *ServerHandler) UpdateMetaConfig(w http.ResponseWriter, r *http.Request)
 	meta, err := config.LoadMetaConfig(h.db)
 	if err != nil || meta == nil {
 		meta = &config.MetaConfig{
-			Host: "0.0.0.0",
+			Host:       "0.0.0.0",
 			MumblePort: 64738, RESTPort: 64730,
 			JWTIssuer: "go-mumble-server", JWTAudience: "go-mumble-server-api", JWTExpiryDays: 30,
 		}
@@ -410,17 +425,12 @@ func (h *ServerHandler) GetChannels(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if len(channels) == 0 {
-		root := models.Channel{
-			ID:         0,
-			ServerID:   uint(id),
-			ParentID:   nil,
-			Name:       "Root",
-			Position:   0,
-			InheritACL: true,
-		}
-		// Select ID to force GORM to include it; otherwise ID 0 is omitted and DB auto-increments
-		if err := h.db.Select("ID", "ServerID", "ParentID", "Name", "Position", "InheritACL").Create(&root).Error; err == nil {
-			channels = append(channels, root)
+		// Seeding belongs to the channel manager, which is the one place that
+		// guarantees the root lands at ID 0 where the protocol expects it.
+		h.chanManager(uint(id))
+		if err := h.db.Where("server_id = ?", id).Order("position, id").Find(&channels).Error; err != nil {
+			http.Error(w, `{"error":"failed to list channels"}`, http.StatusInternalServerError)
+			return
 		}
 	}
 	var cryptoModes map[uint32]string

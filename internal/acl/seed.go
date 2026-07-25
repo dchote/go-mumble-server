@@ -1,10 +1,54 @@
 package acl
 
 import (
+	"time"
+
 	"github.com/dchote/go-mumble-server/internal/database/models"
 	"github.com/dchote/go-mumble-server/pkg/mumble"
 	"gorm.io/gorm"
 )
+
+// CreateACL inserts an ACL row.
+//
+// It writes an explicit column map rather than the struct: apply_here and
+// apply_subs carry a schema default of true, and GORM leaves any zero-valued
+// field with a default out of the INSERT — so a plain Create silently widens
+// every entry that was meant to be scoped. Same for the group flags below.
+func CreateACL(db *gorm.DB, row *models.ChannelACL) error {
+	now := time.Now().Unix()
+	return db.Model(&models.ChannelACL{}).Create(map[string]interface{}{
+		"server_id":    row.ServerID,
+		"channel_id":   row.ChannelID,
+		"priority":     row.Priority,
+		"apply_here":   row.ApplyHere,
+		"apply_subs":   row.ApplySubs,
+		"user_id":      row.UserID,
+		"group_name":   row.GroupName,
+		"access_token": row.AccessToken,
+		"eval_here":    row.EvalHere,
+		"invert":       row.Invert,
+		"grant":        row.Grant,
+		"deny":         row.Deny,
+		"created_at":   now,
+		"updated_at":   now,
+	}).Error
+}
+
+// CreateGroup inserts a group row; see CreateACL for why the columns are explicit.
+func CreateGroup(db *gorm.DB, row *models.ChannelGroup) error {
+	now := time.Now().Unix()
+	return db.Model(&models.ChannelGroup{}).Create(map[string]interface{}{
+		"server_id":       row.ServerID,
+		"channel_id":      row.ChannelID,
+		"name":            row.Name,
+		"inherit":         row.Inherit,
+		"inheritable":     row.Inheritable,
+		"add_user_ids":    row.AddUserIDs,
+		"remove_user_ids": row.RemoveUserIDs,
+		"created_at":      now,
+		"updated_at":      now,
+	}).Error
+}
 
 // EnsureDefaultRootACLs seeds default ACLs and groups for the root channel if none exist.
 func EnsureDefaultRootACLs(db *gorm.DB, serverID uint) error {
@@ -20,7 +64,7 @@ func EnsureDefaultRootACLs(db *gorm.DB, serverID uint) error {
 		{ServerID: serverID, ChannelID: 0, Name: "admin", Inherit: true, Inheritable: true},
 	}
 	for _, g := range groups {
-		if err := db.Create(&g).Error; err != nil {
+		if err := CreateGroup(db, &g); err != nil {
 			return err
 		}
 	}
@@ -39,7 +83,7 @@ func EnsureDefaultRootACLs(db *gorm.DB, serverID uint) error {
 	for _, a := range acls {
 		a.ServerID = serverID
 		a.ChannelID = 0
-		if err := db.Create(&a).Error; err != nil {
+		if err := CreateACL(db, &a); err != nil {
 			return err
 		}
 	}

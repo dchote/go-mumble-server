@@ -50,32 +50,30 @@ A `QReadWriteLock` (`qrwlVoiceThread`) synchronizes them: the main thread takes 
 
 ### RWMutex for Shared State
 
-The server's shared state (channel tree, user map, ACL cache, ban list) is protected by `sync.RWMutex`:
+Shared state is split across one manager per concern — `channel.Manager`, `user.Manager`, the ACL evaluator's cache, `ban.Manager` — each with its own `sync.RWMutex`:
 
 - **Read lock** — Held by audio routing goroutine (UDP), REST API handlers, and permission checks. These are frequent and must be fast.
 - **Write lock** — Held during state mutations: user join/leave, channel create/remove, ACL changes, ban updates. These are infrequent.
 
+No manager hands out a pointer into its own state. Readers get a deep copy, and writers pass a mutation function that runs under the lock:
+
 ```go
-type ServerState struct {
-    mu       sync.RWMutex
-    channels map[uint32]*Channel
-    users    map[uint32]*User
-    aclCache map[aclCacheKey]Permission
+func (m *Manager) Snapshot(sessionID uint32) (mumble.User, bool) {
+    m.mu.RLock()
+    defer m.mu.RUnlock()
+    u, ok := m.bySession[sessionID]
+    if !ok {
+        return mumble.User{}, false
+    }
+    return u.Clone(), true // texture and tokens copied too
 }
 
-func (s *ServerState) GetChannel(id uint32) *Channel {
-    s.mu.RLock()
-    defer s.mu.RUnlock()
-    return s.channels[id]
-}
-
-func (s *ServerState) AddUser(user *User) {
-    s.mu.Lock()
-    defer s.mu.Unlock()
-    s.users[user.Session] = user
-    s.aclCache = nil // invalidate
-}
+func (m *Manager) UpdateUser(sessionID uint32, fn func(*mumble.User)) (mumble.User, bool)
 ```
+
+`channel.Manager` follows the same rule: `GetChannel`, `GetChannelWithMeta`, `GetTree` and `Create` return `*mumble.Channel` values that point at private copies, links slice included. `Update` rewrites the stored channels in place under the write lock, so a caller holding a stored pointer — the sync loop serialising the tree, for instance — would otherwise read a channel mid-rewrite.
+
+**Lock ordering:** a mutation function passed to `UpdateUser` runs while the user manager's lock is held, and the ACL evaluator reads user records to resolve group membership. Resolve every permission question *before* calling `UpdateUser` and pass the answer in — calling the evaluator from inside the closure deadlocks.
 
 ### Per-Client State
 
@@ -109,14 +107,14 @@ Audio routing is the hottest path. To minimize lock contention:
 1. The UDP goroutine holds a read lock only for the duration of recipient lookup (reading channel membership and links).
 2. Actual packet encryption and sendto happen outside the lock.
 3. Channel links and user lists are stored in maps that allow concurrent read access under `RLock`.
-4. Prefer `user.Manager.SpeakGateFor`, `VoiceState`, and `ChannelID` over `GetUser` on the voice path. `GetUser` returns a live pointer after releasing the lock; the control goroutine may mutate it concurrently. `Snapshot` / `UpdateUser` return **deep** copies (including texture / tokens) for safe use after the lock is released.
+4. Prefer the narrow accessors — `user.Manager.SpeakGateFor`, `VoiceState`, `ChannelID`, `SessionIDsInChannel` — on the voice path. They answer one question under the lock instead of copying a whole record. `Snapshot`, `SnapshotAll`, and `SnapshotByChannel` return **deep** copies (including texture and tokens) and belong on the control path.
 
 ### Avoiding Deadlocks
 
 Rules to prevent deadlocks:
 
-1. Never hold a write lock while calling into another subsystem that may take a lock.
-2. Lock ordering: `ServerState.mu` → `Database.mu` (if needed). Never reverse.
+1. Never hold a write lock while calling into another subsystem that may take a lock. In particular, never call the ACL evaluator from inside a `UpdateUser` closure.
+2. Lock ordering: manager mutex → `Database.mu` (if needed). Never reverse.
 3. Prefer short critical sections — copy data out, then process.
 4. REST handlers take a read lock, copy the needed data, release, then serialize to JSON.
 

@@ -4,9 +4,9 @@ import "github.com/dchote/go-mumble-server/pkg/mumble/protocol/wire"
 
 // CryptSetup (type 15).
 type CryptSetup struct {
-	Key          []byte
-	ClientNonce  []byte
-	ServerNonce  []byte
+	Key         []byte
+	ClientNonce []byte
+	ServerNonce []byte
 }
 
 func (m *CryptSetup) Marshal() ([]byte, error) {

@@ -42,18 +42,45 @@ type Server struct {
 	addrBySession   sync.Map // session -> net.Addr
 	sessionByAddr   sync.Map // addr.String() -> uint32 sessionID
 	voiceTargets    sync.Map // session -> map[targetID][]session
-	textRateLimiter sync.Map // session -> *textRateState
-	channelCryptoMu sync.RWMutex
-	channelCrypto   map[uint32]string // channelID -> "legacy"|"lite"|"secure"|"mixed"|""
-	router          *audio.Router
-	udpConn         net.PacketConn
-	voiceDebug      atomic.Bool
+	textRateLimiter sync.Map // session -> *rateWindow
+	// userStateRateLimiter throttles self-targeted UserState, which murmur also
+	// rate-limits because each accepted message fans out to every client.
+	userStateRateLimiter sync.Map // session -> *rateWindow
+	channelCryptoMu      sync.RWMutex
+	channelCrypto        map[uint32]string // channelID -> "legacy"|"lite"|"secure"|"mixed"|""
+	router               *audio.Router
+	udpConn              net.PacketConn
+	voiceDebug           atomic.Bool
+	// Content policy, held separately from cfg so REST edits take effect without a
+	// restart and without racing the handler goroutines that read them.
+	allowRecording atomic.Bool
+	maxTextBytes   atomic.Int64
+	maxImageBytes  atomic.Int64
 }
 
-type textRateState struct {
+// rateWindow is a fixed one-second window counter guarding a per-session message
+// budget.
+type rateWindow struct {
 	mu       sync.Mutex
 	count    int
 	windowAt time.Time
+}
+
+func (r *rateWindow) allow(limit int) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	now := time.Now()
+	if now.Sub(r.windowAt) > time.Second {
+		r.windowAt = now
+		r.count = 0
+	}
+	r.count++
+	return r.count <= limit
+}
+
+func rateLimitAllows(limiter *sync.Map, sessionID uint32, perSecond int) bool {
+	v, _ := limiter.LoadOrStore(sessionID, &rateWindow{})
+	return v.(*rateWindow).allow(perSecond)
 }
 
 // HandleUDP processes an incoming UDP voice or ping packet.
@@ -287,7 +314,7 @@ func (s *Server) canSenderSpeak(sessionID uint32) bool {
 	if g.Mute || g.Suppress || g.SelfMute {
 		return false
 	}
-	return s.acl.Check(g.UserID, g.ChannelID, mumble.PermissionSpeak)
+	return s.aclCheck(acl.Subject{SessionID: sessionID, UserID: g.UserID}, g.ChannelID, mumble.PermissionSpeak)
 }
 
 func (s *Server) audioFilterRecipient(senderSessionID, recipientSessionID uint32) bool {
@@ -406,6 +433,7 @@ func NewServer(cfg *config.Config, db *gorm.DB, serverID uint, udpConn net.Packe
 	}
 	voiceDebug := cfg.VoiceDebug
 	s.voiceDebug.Store(voiceDebug)
+	s.SetContentPolicy(cfg.AllowRecording, cfg.MaxTextMessageLength, cfg.MaxImageMessageLength)
 	s.router = audio.NewRouterWithConfig(audio.RouterConfig{
 		Sender: s,
 		GetChan: func(sid uint32) uint32 {
@@ -478,23 +506,137 @@ func (s *Server) ACLEvaluator() *acl.Evaluator {
 
 // RefreshSuppressStates recomputes Suppress from Speak ACL for every connected user
 // and broadcasts any changes. Call after ACL edits so clients (including Mumla/Plumble)
-// see the correct suppressed indicator without rejoining.
+// see the correct suppressed indicator without rejoining. Sends a minimal
+// {session, suppress} delta per murmur's clearACLCache (Server.cpp:2187-2199), with
+// the real suppress value rather than upstream's hardcoded true, which is a known
+// upstream bug.
+//
+// Note: Humla's AudioHandler treats a suppress-only update as authoritative for the
+// mute OR of mute/self_mute/suppress (absent fields read as false). That is a client
+// bug; we still match murmur's minimal delta rather than over-broadcasting self_mute.
+// See docs/features/0007-userstate-field-presence.md.
 func (s *Server) RefreshSuppressStates() {
 	if s.acl == nil {
 		return
 	}
-	for _, u := range s.users.ListAll() {
+	for _, u := range s.users.SnapshotAll() {
 		sid := u.SessionID
-		var before bool
+		// Resolved before UpdateUser — see maySpeak.
+		maySpeak := s.maySpeak(acl.SubjectOf(u), u.ChannelID)
+		var changed bool
 		updated, ok := s.users.UpdateUser(sid, func(live *mumble.User) {
-			before = live.Suppress
-			syncSuppressFromSpeakACL(live, s)
+			changed = applySuppressFromSpeak(live, maySpeak)
 		})
-		if !ok || updated.Suppress == before {
+		if !ok || !changed {
 			continue
 		}
-		s.Broadcast(0, protocol.MessageUserState, userToState(&updated))
+		s.Broadcast(0, protocol.MessageUserState, &messages.UserState{
+			Session:   sid,
+			Suppress:  updated.Suppress,
+			SetFields: messages.UserStateSetSession | messages.UserStateSetSuppress,
+		})
 	}
+}
+
+// baselinePermissions is what this server answers with when it has no ACL
+// evaluator at all, so an evaluator-less server is neither wide open nor completely
+// locked down: ordinary participation is allowed, administration is not.
+const baselinePermissions = acl.DefaultPermissions
+
+// aclCheck resolves a permission for a subject in channelID. Every permission gate
+// in this package goes through here rather than touching s.acl directly, so the
+// no-evaluator case is answered in exactly one place.
+//
+// Lock ordering: resolve ACL questions BEFORE taking the user manager's lock. The
+// evaluator can look up connected users for group membership, so calling it from
+// inside UpdateUser would deadlock against that same lock.
+func (s *Server) aclCheck(subject acl.Subject, channelID uint32, perm mumble.Permission) bool {
+	if s == nil || s.acl == nil {
+		return baselinePermissions&perm == perm
+	}
+	return s.acl.Check(subject, channelID, perm)
+}
+
+// aclPermissions returns the effective permission mask for a subject in channelID.
+func (s *Server) aclPermissions(subject acl.Subject, channelID uint32) uint32 {
+	if s == nil || s.acl == nil {
+		return uint32(baselinePermissions)
+	}
+	return s.acl.EffectivePermissions(subject, channelID)
+}
+
+// invalidateACLCache drops cached permissions. Group membership depends on where a
+// user currently is (@in/@out) and on the tokens they presented, so every change to
+// either has to go through here.
+func (s *Server) invalidateACLCache() {
+	if s == nil || s.acl == nil {
+		return
+	}
+	s.acl.InvalidateCache()
+}
+
+// maySpeak reports whether the subject may Speak in channelID.
+func (s *Server) maySpeak(subject acl.Subject, channelID uint32) bool {
+	return s.aclCheck(subject, channelID, mumble.PermissionSpeak)
+}
+
+// channelIsFull reports whether a channel has reached its user limit for the
+// subject, mirroring murmur's Server::isChannelFull (Server.cpp:2450): a Write
+// holder is never blocked, and a limit of 0 means unlimited.
+func (s *Server) channelIsFull(channelID uint32, subject acl.Subject) bool {
+	ch, ok := s.chans.GetChannel(channelID)
+	if !ok || ch.MaxUsers == 0 {
+		return false
+	}
+	if s.aclCheck(subject, channelID, mumble.PermissionWrite) {
+		return false
+	}
+	return uint32(s.users.CountInChannel(channelID)) >= ch.MaxUsers
+}
+
+// firstPermanentChannel walks up from channelID to the nearest ancestor that is not
+// a temporary channel, mirroring the loop murmur uses before honouring a mute in a
+// temporary channel (Messages.cpp:815-833). Reports false when the whole chain is
+// temporary or the channel is unknown.
+func (s *Server) firstPermanentChannel(channelID uint32) (uint32, bool) {
+	if s.chans == nil {
+		return channelID, true
+	}
+	for _, cid := range s.chans.AncestorChain(channelID) {
+		ch, ok := s.chans.GetChannel(cid)
+		if !ok {
+			return 0, false
+		}
+		if !ch.IsTemporary {
+			return cid, true
+		}
+	}
+	return 0, false
+}
+
+// SetContentPolicy updates the recording policy and content size limits. Callable
+// at runtime when server config is updated via REST.
+func (s *Server) SetContentPolicy(allowRecording bool, maxTextBytes, maxImageBytes int) {
+	s.allowRecording.Store(allowRecording)
+	s.maxTextBytes.Store(int64(maxTextBytes))
+	s.maxImageBytes.Store(int64(maxImageBytes))
+}
+
+// recordingAllowed reports whether clients may announce that they are recording.
+func (s *Server) recordingAllowed() bool {
+	return s.allowRecording.Load()
+}
+
+// maxTextLength returns the cap on user-supplied text (chat messages, comments).
+// 0 means unlimited.
+func (s *Server) maxTextLength() int {
+	return int(s.maxTextBytes.Load())
+}
+
+// maxImageLength returns the cap on user-supplied image payloads (avatar textures).
+// 0 means unlimited.
+func (s *Server) maxImageLength() int {
+	return int(s.maxImageBytes.Load())
 }
 
 // BanManager returns the ban manager (for cache invalidation when bans change via REST).
@@ -551,14 +693,15 @@ func (s *Server) UnregisterConn(sessionID uint32) {
 	s.voiceTargets.Delete(sessionID)
 	s.addrBySession.Delete(sessionID)
 	s.textRateLimiter.Delete(sessionID)
+	s.userStateRateLimiter.Delete(sessionID)
 	s.chans.CleanEmptyTempChannels(func(cid uint32) bool {
-		return len(s.users.ListByChannel(cid)) > 0
+		return s.users.CountInChannel(cid) > 0
 	})
 }
 
 // KickSession kicks a user (server-initiated, e.g. from REST API). Actor 0 = server.
 func (s *Server) KickSession(sessionID uint32, reason string) bool {
-	u, ok := s.users.GetUser(sessionID)
+	u, ok := s.users.Snapshot(sessionID)
 	if !ok {
 		return false
 	}
@@ -572,7 +715,7 @@ func (s *Server) KickSession(sessionID uint32, reason string) bool {
 		s.UpdateChannelCrypto(channelID)
 	}
 	if targetConn != nil {
-		targetConn.Close()
+		targetConn.CloseAfterFlush()
 	}
 	slog.Info("User kicked via REST", "session", sessionID, "name", u.Name, "reason", reason)
 	return true
@@ -580,24 +723,60 @@ func (s *Server) KickSession(sessionID uint32, reason string) bool {
 
 // MuteSession sets server mute state for a user. Routed through the same helper as
 // the protocol handler so the "un-muting clears deafen" invariant holds here too.
+// Broadcasts a minimal {session, actor, mute} delta, plus deaf only when the cascade
+// cleared it, matching handleUserState's echo shape rather than a full snapshot.
 func (s *Server) MuteSession(sessionID uint32, mute bool) bool {
-	req := &messages.UserState{Mute: mute, SetFields: messages.UserStateSetMute}
+	req := &messages.UserState{
+		Session:   sessionID,
+		Mute:      mute,
+		SetFields: messages.UserStateSetSession | messages.UserStateSetMute,
+	}
 	updated, ok := s.users.UpdateUser(sessionID, func(u *mumble.User) {
 		applyAdminVoiceState(&u.VoiceState, req)
 	})
 	if !ok {
 		return false
 	}
-	state := userToState(&updated)
-	state.Actor = 0
-	s.Broadcast(0, protocol.MessageUserState, state)
+	// Actor 0 = server-initiated (REST), matching KickSession/BanAndKickSession. Left
+	// without presence so it is omitted on the wire rather than claiming session 0 acted.
+	s.Broadcast(0, protocol.MessageUserState, req)
 	slog.Info("User mute changed via REST", "session", sessionID, "name", updated.Name, "mute", mute)
 	return true
 }
 
+// banEntry starts a BanList entry with the shared name/reason/start fields.
+func banEntry(name, reason string) messages.BanEntry {
+	return messages.BanEntry{
+		Name:   name,
+		Reason: reason,
+		Start:  time.Now().Format(time.RFC3339),
+	}
+}
+
+// banEntryByCert bans a client by certificate fingerprint so the ban survives IP changes.
+func banEntryByCert(name, reason, certHash string) messages.BanEntry {
+	be := banEntry(name, reason)
+	be.Hash = strings.ToLower(certHash)
+	return be
+}
+
+// banEntryByIP bans a client by address. IPv4 uses a /32 mask; IPv6 uses /128.
+func banEntryByIP(name, reason string, ip net.IP) messages.BanEntry {
+	be := banEntry(name, reason)
+	mask := uint32(32)
+	if ip4 := ip.To4(); ip4 != nil {
+		ip = ip4
+	} else {
+		mask = 128
+	}
+	be.Address = ip
+	be.Mask = mask
+	return be
+}
+
 // BanAndKickSession bans the user by IP and kicks them.
 func (s *Server) BanAndKickSession(sessionID uint32, reason string) bool {
-	u, ok := s.users.GetUser(sessionID)
+	u, ok := s.users.Snapshot(sessionID)
 	if !ok {
 		return false
 	}
@@ -616,29 +795,10 @@ func (s *Server) BanAndKickSession(sessionID uint32, reason string) bool {
 	existing := s.bans.List()
 	// Ban by cert hash when available (persists across IP changes); otherwise by IP.
 	if u.CertHash != "" {
-		newBan := messages.BanEntry{
-			Hash:   strings.ToLower(u.CertHash),
-			Name:   u.Name,
-			Reason: reason,
-			Start:  time.Now().Format(time.RFC3339),
-		}
-		existing = append(existing, newBan)
+		existing = append(existing, banEntryByCert(u.Name, reason, u.CertHash))
 		_ = s.bans.Replace(existing)
 	} else if ip != nil {
-		mask := uint32(32)
-		if ip4 := ip.To4(); ip4 != nil {
-			ip = ip4
-		} else {
-			mask = 128
-		}
-		newBan := messages.BanEntry{
-			Address: ip,
-			Mask:    mask,
-			Name:    u.Name,
-			Reason:  reason,
-			Start:   time.Now().Format(time.RFC3339),
-		}
-		existing = append(existing, newBan)
+		existing = append(existing, banEntryByIP(u.Name, reason, ip))
 		_ = s.bans.Replace(existing)
 	}
 	channelID := u.ChannelID
@@ -650,7 +810,7 @@ func (s *Server) BanAndKickSession(sessionID uint32, reason string) bool {
 		s.UpdateChannelCrypto(channelID)
 	}
 	if targetConn != nil {
-		targetConn.Close()
+		targetConn.CloseAfterFlush()
 	}
 	slog.Info("User banned and kicked via REST", "session", sessionID, "name", u.Name, "reason", reason)
 	return true
@@ -676,8 +836,25 @@ func (s *Server) handleVersion(msgType protocol.MessageType, payload []byte, ctx
 		}
 		slog.Debug("client version", "release", v.Release, "os", v.OS)
 		c.SetClientCryptoModes(v.CryptoModes)
+		c.SetClientVersion(clientVersionFull(v))
 	}
 	return nil
+}
+
+// clientVersionFull resolves a client's Version message to Mumble's packed 64-bit
+// version_v2 form, preferring version_v2 and falling back to the legacy 32-bit
+// version_v1 encoding. Mirrors MumbleProto::getVersion (research/mumble/src/ProtoUtils.cpp).
+func clientVersionFull(v messages.Version) uint64 {
+	if v.VersionV2 != 0 {
+		return v.VersionV2
+	}
+	if v.VersionV1 != 0 {
+		major := uint64((v.VersionV1 & 0xFFFF0000) >> 16)
+		minor := uint64((v.VersionV1 & 0xFF00) >> 8)
+		patch := uint64(v.VersionV1 & 0xFF)
+		return major<<48 | minor<<32 | patch<<16
+	}
+	return 0
 }
 
 func (s *Server) handleAuthenticate(msgType protocol.MessageType, payload []byte, ctx interface{}) error {
@@ -694,7 +871,7 @@ func (s *Server) handleAuthenticate(msgType protocol.MessageType, payload []byte
 	if authMsg.Username == "" {
 		return s.sendReject(c, messages.RejectInvalidUsername, "Username required")
 	}
-	if _, ok := s.users.GetByName(authMsg.Username); ok {
+	if _, ok := s.users.SnapshotByName(authMsg.Username); ok {
 		return s.sendReject(c, messages.RejectUsernameInUse, "Username in use")
 	}
 	if s.users.Count() >= s.cfg.MaxUsers && s.cfg.MaxUsers > 0 {
@@ -720,10 +897,6 @@ func (s *Server) handleAuthenticate(msgType protocol.MessageType, payload []byte
 			apiUserID = uint(id)
 		}
 	}
-	defaultChan := uint32(s.chans.RootID())
-	if s.cfg.DefaultChannel > 0 {
-		defaultChan = uint32(s.cfg.DefaultChannel)
-	}
 	userID := uint32(0)
 	if apiUserID != 0 {
 		userID = acl.MakeAPIUserID(apiUserID)
@@ -733,12 +906,17 @@ func (s *Server) handleAuthenticate(msgType protocol.MessageType, payload []byte
 		}
 		userID = uid
 	}
-	u := &mumble.User{
-		SessionID:    0,
+	// The SuperUser identity carries immunity from other admins' UserState changes,
+	// so it may only be claimed by a connection that actually proved an account.
+	if authMsg.Username == mumble.SuperUserName && userID == 0 {
+		return s.sendReject(c, messages.RejectWrongUserPW, "SuperUser requires an account")
+	}
+	u := mumble.User{
 		UserID:       userID,
-		ChannelID:    defaultChan,
+		ChannelID:    s.joinChannelFor(userID),
 		Name:         authMsg.Username,
 		AccessTokens: authMsg.Tokens,
+		IsSuperUser:  authMsg.Username == mumble.SuperUserName,
 	}
 	if addr != nil {
 		if host, _, err := net.SplitHostPort(addr.String()); err == nil {
@@ -748,17 +926,47 @@ func (s *Server) handleAuthenticate(msgType protocol.MessageType, payload []byte
 		}
 	}
 	u.CertHash = certHash
-	if !s.users.Add(u) {
+	stored, ok := s.users.Add(u)
+	if !ok {
 		return s.sendReject(c, messages.RejectServerFull, "Server full")
 	}
-	c.SetSessionID(u.SessionID)
-	c.SetUser(u.Name, u.UserID, u.ChannelID)
+	c.SetSessionID(stored.SessionID)
+	c.SetUserName(stored.Name)
 	c.SetActive()
-	s.sendSync(c, u)
-	s.UpdateChannelCrypto(u.ChannelID)
-	s.Broadcast(u.SessionID, protocol.MessageUserState, userToState(u))
-	slog.Info("Mumble client authenticated", "user", u.Name, "session", u.SessionID, "channel", u.ChannelID)
+	// This session brings its own access tokens and channel, both of which feed
+	// group resolution, so anything cached for this account is now suspect.
+	s.invalidateACLCache()
+	s.sendSync(c, stored)
+	s.UpdateChannelCrypto(stored.ChannelID)
+	s.Broadcast(stored.SessionID, protocol.MessageUserState, userToState(stored))
+	slog.Info("Mumble client authenticated", "user", stored.Name, "session", stored.SessionID, "channel", stored.ChannelID)
 	return nil
+}
+
+// joinChannelFor picks the channel a connecting user lands in: the configured
+// default, falling back to root when that channel is full or cannot be entered.
+// Murmur applies the same fallback chain when a client connects (Messages.cpp:300-315).
+// The user has no session yet, so permissions resolve against the account alone.
+func (s *Server) joinChannelFor(userID uint32) uint32 {
+	subject := acl.SubjectForUserID(userID)
+	root := uint32(s.chans.RootID())
+	if s.cfg.DefaultChannel <= 0 {
+		return root
+	}
+	target := uint32(s.cfg.DefaultChannel)
+	if target == root {
+		return root
+	}
+	if _, exists := s.chans.GetChannel(target); !exists {
+		return root
+	}
+	if !s.aclCheck(subject, target, mumble.PermissionEnter) {
+		return root
+	}
+	if s.channelIsFull(target, subject) {
+		return root
+	}
+	return target
 }
 
 // lookupRegisteredUser returns UserID and credentials for a username on this server's registered_users.
@@ -828,9 +1036,13 @@ func (s *Server) negotiateCryptoMode(c *connection.Conn) crypto.Mode {
 	return crypto.ModeLegacy
 }
 
-func (s *Server) sendSync(c *connection.Conn, u *mumble.User) {
+func (s *Server) sendSync(c *connection.Conn, u mumble.User) {
 	mode := s.negotiateCryptoMode(c)
-	u.CryptoMode = cryptoModeString(mode)
+	if updated, ok := s.users.UpdateUser(u.SessionID, func(live *mumble.User) {
+		live.CryptoMode = cryptoModeString(mode)
+	}); ok {
+		u = updated
+	}
 	c.Crypt = crypto.NewCryptState(mode)
 	key, encNonce, decNonce := s.generateCryptSetup(mode)
 	c.Crypt.SetKey(key, encNonce, decNonce)
@@ -848,12 +1060,12 @@ func (s *Server) sendSync(c *connection.Conn, u *mumble.User) {
 		_ = c.WriteMessage(protocol.MessageChannelState, cs)
 	}
 	_ = c.WriteMessage(protocol.MessageUserState, userToState(u))
-	for _, ou := range s.users.ListAll() {
+	for _, ou := range s.users.SnapshotAll() {
 		if ou.SessionID != u.SessionID {
 			_ = c.WriteMessage(protocol.MessageUserState, userToState(ou))
 		}
 	}
-	perms := uint64(s.acl.EffectivePermissions(u.UserID, s.chans.RootID()))
+	perms := uint64(s.aclPermissions(acl.SubjectOf(u), s.chans.RootID()))
 	_ = c.WriteMessage(protocol.MessageServerSync, &messages.ServerSync{
 		Session:      u.SessionID,
 		MaxBandwidth: uint32(s.cfg.MaxBandwidth),
@@ -861,11 +1073,13 @@ func (s *Server) sendSync(c *connection.Conn, u *mumble.User) {
 		Permissions:  perms,
 	})
 	_ = c.WriteMessage(protocol.MessageServerConfig, &messages.ServerConfig{
-		MaxBandwidth:  uint32(s.cfg.MaxBandwidth),
-		WelcomeText:   s.cfg.WelcomeText,
-		AllowHTML:     true,
-		MessageLength: 5000,
-		MaxUsers:      uint32(s.cfg.MaxUsers),
+		MaxBandwidth:       uint32(s.cfg.MaxBandwidth),
+		WelcomeText:        s.cfg.WelcomeText,
+		AllowHTML:          true,
+		MessageLength:      uint32(s.maxTextLength()),
+		ImageMessageLength: uint32(s.maxImageLength()),
+		MaxUsers:           uint32(s.cfg.MaxUsers),
+		RecordingAllowed:   s.recordingAllowed(),
 	})
 }
 
@@ -909,36 +1123,62 @@ func channelToState(ch *mumble.Channel) *messages.ChannelState {
 	}
 }
 
-// userToState builds an authoritative snapshot of a user for broadcast.
+// userToState builds a join/roster snapshot of a user for broadcast, mirroring
+// murmur's transmission of a user's profile to a newly connecting client
+// (Messages.cpp:493-530). This is a snapshot, not a delta: field presence here means
+// "this flag is set", not "this flag just changed", so voice flags are emitted only
+// when true. mute/deaf and self_mute/self_deaf are mutually exclusive on the wire
+// (a deafened user does not also carry an explicit mute=true), matching murmur's
+// `if (deaf) ... else if (mute) ...` exactly.
 //
-// The voice flags carry explicit proto2 presence so that every flag, including the
-// cleared ones, appears on the wire. Clients that derive their local mute state from
-// the server echo rather than tracking it themselves (Mumla and Plumble do this)
-// would otherwise never see a flag being turned off, and would stay muted forever.
+// This must never be used to build the echo for a client-initiated UserState update
+// (handleUserState) or any other delta broadcast: those broadcast the mutated inbound
+// message instead, per docs/architecture/protocol-encoding.md, so that presence
+// continues to mean "changed" on that path. Using a snapshot there was the v0.1.4
+// regression this function's shape now guards against.
 //
 // Name and UserID are included whenever non-empty/non-zero (typical for connected
 // users) because these snapshots are meant to be self-contained. Texture and Comment
 // keep omit-if-empty encoding and do not set presence bits, so a routine mute update
 // never looks like a blob clear. PluginIdentity and PluginContext are never sent to
 // clients (per Mumble.proto).
-func userToState(u *mumble.User) *messages.UserState {
-	return &messages.UserState{
-		Session:         u.SessionID,
-		UserID:          u.UserID,
-		Name:            u.Name,
-		ChannelID:       u.ChannelID,
-		Mute:            u.Mute,
-		Deaf:            u.Deaf,
-		Suppress:        u.Suppress,
-		SelfMute:        u.SelfMute,
-		SelfDeaf:        u.SelfDeaf,
-		PrioritySpeaker: u.PrioritySpeaker,
-		Recording:       u.Recording,
-		Texture:         u.Texture,
-		Comment:         u.Comment,
-		SetFields: messages.UserStateSetSession | messages.UserStateSetChannelID |
-			messages.UserStateVoiceFields,
+func userToState(u mumble.User) *messages.UserState {
+	state := &messages.UserState{
+		Session:   u.SessionID,
+		UserID:    u.UserID,
+		Name:      u.Name,
+		ChannelID: u.ChannelID,
+		Texture:   u.Texture,
+		Comment:   u.Comment,
+		SetFields: messages.UserStateSetSession | messages.UserStateSetChannelID,
 	}
+	if u.Deaf {
+		state.Deaf = true
+		state.SetFields |= messages.UserStateSetDeaf
+	} else if u.Mute {
+		state.Mute = true
+		state.SetFields |= messages.UserStateSetMute
+	}
+	if u.Suppress {
+		state.Suppress = true
+		state.SetFields |= messages.UserStateSetSuppress
+	}
+	if u.PrioritySpeaker {
+		state.PrioritySpeaker = true
+		state.SetFields |= messages.UserStateSetPrioritySpeaker
+	}
+	if u.Recording {
+		state.Recording = true
+		state.SetFields |= messages.UserStateSetRecording
+	}
+	if u.SelfDeaf {
+		state.SelfDeaf = true
+		state.SetFields |= messages.UserStateSetSelfDeaf
+	} else if u.SelfMute {
+		state.SelfMute = true
+		state.SetFields |= messages.UserStateSetSelfMute
+	}
+	return state
 }
 
 func (s *Server) handlePing(msgType protocol.MessageType, payload []byte, ctx interface{}) error {
@@ -977,11 +1217,11 @@ func (s *Server) handleUserRemove(msgType protocol.MessageType, payload []byte, 
 	if ur.Session == 0 {
 		return nil
 	}
-	sender, ok := s.users.GetUser(c.SessionID())
+	sender, ok := s.users.Snapshot(c.SessionID())
 	if !ok {
 		return nil
 	}
-	target, ok := s.users.GetUser(ur.Session)
+	target, ok := s.users.Snapshot(ur.Session)
 	if !ok {
 		return nil
 	}
@@ -989,7 +1229,8 @@ func (s *Server) handleUserRemove(msgType protocol.MessageType, payload []byte, 
 	if ur.Ban {
 		perm = mumble.PermissionBan
 	}
-	if !s.acl.Check(sender.UserID, s.chans.RootID(), perm) {
+	// SuperUser can never be kicked or banned, by anybody (murmur Messages.cpp:1245).
+	if target.IsSuperUser || !s.aclCheck(acl.SubjectOf(sender), s.chans.RootID(), perm) {
 		_ = c.WriteMessage(protocol.MessagePermissionDenied, &messages.PermissionDenied{
 			Type: messages.DenyPermission, Reason: "No " + map[bool]string{false: "kick", true: "ban"}[ur.Ban] + " permission",
 		})
@@ -1006,21 +1247,8 @@ func (s *Server) handleUserRemove(msgType protocol.MessageType, payload []byte, 
 			}
 		}
 		if ip != nil {
-			mask := uint32(32)
-			if ip4 := ip.To4(); ip4 != nil {
-				ip = ip4
-			} else {
-				mask = 128
-			}
 			existing := s.bans.List()
-			newBan := messages.BanEntry{
-				Address: ip,
-				Mask:    mask,
-				Name:    target.Name,
-				Reason:  ur.Reason,
-				Start:   time.Now().Format(time.RFC3339),
-			}
-			existing = append(existing, newBan)
+			existing = append(existing, banEntryByIP(target.Name, ur.Reason, ip))
 			_ = s.bans.Replace(existing)
 		}
 	}
@@ -1031,7 +1259,7 @@ func (s *Server) handleUserRemove(msgType protocol.MessageType, payload []byte, 
 		s.UpdateChannelCrypto(channelID)
 	}
 	if targetConn != nil {
-		targetConn.Close()
+		targetConn.CloseAfterFlush()
 	}
 	return nil
 }
@@ -1047,13 +1275,29 @@ const selfOnlyUserStateFields = messages.UserStateSetSelfMute | messages.UserSta
 const adminVoiceUserStateFields = messages.UserStateSetMute | messages.UserStateSetDeaf |
 	messages.UserStateSetSuppress | messages.UserStateSetPrioritySpeaker
 
-// handledUserStateFields are the UserState bits this server applies. A message with
-// none of these set is a no-op and must not produce a broadcast (murmur only
-// broadcasts when a handled field was present).
-const handledUserStateFields = selfOnlyUserStateFields | adminVoiceUserStateFields |
+// pluginUserStateFields are applied to server-side state but never set murmur's
+// bBroadcast flag on their own (Messages.cpp:995-1007): they are stripped before
+// any echo and a plugin-only message produces no UserState broadcast.
+const pluginUserStateFields = messages.UserStateSetPluginContext | messages.UserStateSetPluginIdentity
+
+// broadcastUserStateFields are the fields that cause a UserState broadcast after
+// apply (murmur's bBroadcast). plugin_context/plugin_identity are intentionally
+// excluded — see pluginUserStateFields.
+const broadcastUserStateFields = (selfOnlyUserStateFields &^ pluginUserStateFields) |
+	adminVoiceUserStateFields |
 	messages.UserStateSetChannelID | messages.UserStateSetTexture |
 	messages.UserStateSetComment
 
+// handledUserStateFields are the UserState bits this server applies. A message with
+// none of these set is a no-op. Broadcasting is gated separately on
+// broadcastUserStateFields after plugin fields are stripped.
+const handledUserStateFields = broadcastUserStateFields | pluginUserStateFields
+
+// handleUserState implements murmur's Server::msgUserState (Messages.cpp:764-1229).
+// The broadcast is a delta echo of the (possibly server-mutated) inbound message,
+// never a fresh snapshot: presence on this path means "this changed", and building
+// the broadcast from userToState was the v0.1.4 regression. See
+// docs/architecture/protocol-encoding.md for the full delta-vs-snapshot rule.
 func (s *Server) handleUserState(msgType protocol.MessageType, payload []byte, ctx interface{}) error {
 	c := ctx.(*connection.Conn)
 	if c.State() != connection.StateActive {
@@ -1063,9 +1307,7 @@ func (s *Server) handleUserState(msgType protocol.MessageType, payload []byte, c
 	if err := us.Unmarshal(payload); err != nil {
 		return err
 	}
-	if us.SetFields&handledUserStateFields == 0 {
-		return nil
-	}
+
 	sender, ok := s.users.Snapshot(c.SessionID())
 	if !ok {
 		return nil
@@ -1080,6 +1322,48 @@ func (s *Server) handleUserState(msgType protocol.MessageType, payload []byte, c
 		return nil
 	}
 	isAdminOp := targetSession != c.SessionID()
+
+	deny := func(channelID uint32, denyType messages.DenyType, reason string) {
+		_ = c.WriteMessage(protocol.MessagePermissionDenied, &messages.PermissionDenied{
+			ChannelID: channelID, Type: denyType, Reason: reason,
+		})
+	}
+
+	// Nobody but SuperUser may act on SuperUser, and this outranks every other
+	// check in the handler (Messages.cpp:775-780).
+	if target.IsSuperUser && !sender.IsSuperUser {
+		deny(target.ChannelID, messages.DenySuperUser, "Cannot modify SuperUser")
+		return nil
+	}
+
+	// Renaming is never done via UserState — names are set at Authenticate time —
+	// so has_name() is an unconditional deny (Messages.cpp:784-787), independent of
+	// who the message targets.
+	if us.Has(messages.UserStateSetName) {
+		_ = c.WriteMessage(protocol.MessagePermissionDenied, &messages.PermissionDenied{Type: messages.DenyUserName})
+		return nil
+	}
+
+	// Murmur rate-limits self-targeted UserState (Messages.cpp:790) because every
+	// accepted message fans out to every connected client.
+	if !isAdminOp && !s.checkUserStateRateLimit(c.SessionID()) {
+		return nil
+	}
+
+	// Self-registration and channel listening are not implemented by this server, so
+	// strip them: applying them silently would misrepresent what happened, and
+	// echoing them unstripped (change 2 below) would announce a state we never
+	// actually established.
+	us.UserID = 0
+	us.SetFields &^= messages.UserStateSetUserID
+	us.TemporaryAccessTokens = nil
+	us.ListeningChannelAdd = nil
+	us.ListeningChannelRemove = nil
+	us.ListeningVolumeAdjustment = nil
+
+	if us.SetFields == 0 {
+		return nil
+	}
 
 	// These fields describe a client's own preferences and are meaningless when aimed
 	// at somebody else. Drop the message rather than applying the remainder of it.
@@ -1096,71 +1380,139 @@ func (s *Server) handleUserState(msgType protocol.MessageType, payload []byte, c
 	if us.SetFields&adminVoiceUserStateFields != 0 {
 		// Suppress is derived from channel speak ACLs by the server, so a client may
 		// only ever clear it, never assert it.
-		if us.Suppress || !s.acl.Check(sender.UserID, target.ChannelID, mumble.PermissionMuteDeafen) {
-			_ = c.WriteMessage(protocol.MessagePermissionDenied, &messages.PermissionDenied{
-				ChannelID: target.ChannelID, Type: messages.DenyPermission,
-				Reason: "No mute/deafen permission",
-			})
+		if us.Suppress || !s.aclCheck(acl.SubjectOf(sender), target.ChannelID, mumble.PermissionMuteDeafen) {
+			deny(target.ChannelID, messages.DenyPermission, "No mute/deafen permission")
 			return nil
+		}
+		// Muting somebody inside a temporary channel is an escalation risk: anyone
+		// can make a temp channel and grant themselves MuteDeafen in it. Murmur
+		// therefore re-checks MuteDeafen in the first non-temporary ancestor
+		// (Messages.cpp:815-833). priority_speaker is exempt upstream.
+		if us.SetFields&(messages.UserStateSetMute|messages.UserStateSetDeaf|messages.UserStateSetSuppress) != 0 {
+			if permanent, ok := s.firstPermanentChannel(target.ChannelID); !ok ||
+				!s.aclCheck(acl.SubjectOf(sender), permanent, mumble.PermissionMuteDeafen) {
+				deny(target.ChannelID, messages.DenyTemporaryChannel, "No mute/deafen permission outside temporary channel")
+				return nil
+			}
 		}
 	}
 
+	// Comments and textures belong to their owner. Murmur lets an admin holding
+	// ResetUserContent on root clear somebody else's, but never set one
+	// (Messages.cpp:890-925), and bounds both against the advertised limits.
+	if us.Has(messages.UserStateSetComment) {
+		if isAdminOp {
+			if !s.aclCheck(acl.SubjectOf(sender), s.chans.RootID(), mumble.PermissionResetUser) {
+				deny(s.chans.RootID(), messages.DenyPermission, "No permission to reset user content")
+				return nil
+			}
+			if us.Comment != "" {
+				deny(target.ChannelID, messages.DenyTextTooLong, "May only clear another user's comment")
+				return nil
+			}
+		}
+		if max := s.maxTextLength(); max > 0 && len(us.Comment) > max {
+			deny(target.ChannelID, messages.DenyTextTooLong, "Comment too long")
+			return nil
+		}
+	}
+	if us.Has(messages.UserStateSetTexture) {
+		if max := s.maxImageLength(); max > 0 && len(us.Texture) > max {
+			deny(target.ChannelID, messages.DenyTextTooLong, "Texture too large")
+			return nil
+		}
+		if isAdminOp {
+			if !s.aclCheck(acl.SubjectOf(sender), s.chans.RootID(), mumble.PermissionResetUser) {
+				deny(s.chans.RootID(), messages.DenyPermission, "No permission to reset user content")
+				return nil
+			}
+			if len(us.Texture) > 0 {
+				deny(target.ChannelID, messages.DenyTextTooLong, "May only clear another user's texture")
+				return nil
+			}
+		}
+	}
+
+	// A client that starts recording on a server which forbids it is disconnected,
+	// not merely ignored (Messages.cpp:1057-1070).
+	if us.Has(messages.UserStateSetRecording) && us.Recording && !target.Recording && !s.recordingAllowed() {
+		_ = c.WriteMessage(protocol.MessageUserRemove, &messages.UserRemove{
+			Session: targetSession,
+			Reason:  "Recording is not allowed on this server",
+		})
+		c.CloseAfterFlush()
+		return nil
+	}
+
+	// recording only counts as a change (and only ever broadcasts) when the value
+	// actually differs from the stored state (Messages.cpp:1048); resending the
+	// current value is a no-op even though the field is present on the wire.
+	if us.Has(messages.UserStateSetRecording) && us.Recording == target.Recording {
+		us.SetFields &^= messages.UserStateSetRecording
+	}
+
+	if us.SetFields&handledUserStateFields == 0 {
+		return nil
+	}
+
 	channelMoved := false
+	var maySpeakAtDest bool
 	if us.Has(messages.UserStateSetChannelID) && s.chans != nil {
 		if _, exists := s.chans.GetChannel(us.ChannelID); !exists {
 			return nil
 		}
 		if us.ChannelID == target.ChannelID {
-			// Same channel: ignore the move but still apply any other fields.
-		} else if isAdminOp {
-			if !s.acl.Check(sender.UserID, target.ChannelID, mumble.PermissionMove) {
-				_ = c.WriteMessage(protocol.MessagePermissionDenied, &messages.PermissionDenied{
-					ChannelID: target.ChannelID, Type: messages.DenyPermission, Reason: "No move permission",
-				})
-				return nil
-			}
-			channelMoved = true
-		} else if !s.acl.Check(target.UserID, us.ChannelID, mumble.PermissionEnter) {
-			_ = c.WriteMessage(protocol.MessagePermissionDenied, &messages.PermissionDenied{
-				ChannelID: us.ChannelID, Type: messages.DenyPermission, Reason: "Permission denied",
-			})
+			// Requesting the channel you're already in drops the entire message, not
+			// just the move (Messages.cpp:800-803) — matching murmur exactly.
 			return nil
-		} else {
-			channelMoved = true
 		}
-		if channelMoved {
-			oldChannelID := target.ChannelID
-			s.users.SetChannel(targetSession, us.ChannelID)
-			target.ChannelID = us.ChannelID
-			if s.acl != nil {
-				s.acl.InvalidateCache() // @in/@out depend on channel
-			}
-			s.UpdateChannelCrypto(oldChannelID)
-			s.UpdateChannelCrypto(us.ChannelID)
-			if targetConn := s.conn(targetSession); targetConn != nil {
-				targetConn.SetUser(target.Name, target.UserID, target.ChannelID)
-				if targetSession == c.SessionID() && s.acl != nil {
-					perms := s.acl.EffectivePermissions(target.UserID, us.ChannelID)
-					_ = targetConn.WriteMessage(protocol.MessagePermissionQuery, &messages.PermissionQuery{
-						ChannelID:   us.ChannelID,
-						Permissions: uint32(perms),
-					})
-				}
+		// Two independent checks, both from Messages.cpp:805-813. Moving somebody
+		// else additionally requires Move where they currently are; every move then
+		// requires either Move on the destination (an admin pulling someone in) or
+		// the target's own right to Enter it.
+		if isAdminOp && !s.aclCheck(acl.SubjectOf(sender), target.ChannelID, mumble.PermissionMove) {
+			deny(target.ChannelID, messages.DenyPermission, "No move permission")
+			return nil
+		}
+		if !s.aclCheck(acl.SubjectOf(sender), us.ChannelID, mumble.PermissionMove) &&
+			!s.aclCheck(acl.SubjectOf(target), us.ChannelID, mumble.PermissionEnter) {
+			deny(us.ChannelID, messages.DenyPermission, "Permission denied")
+			return nil
+		}
+		if s.channelIsFull(us.ChannelID, acl.SubjectOf(sender)) {
+			deny(us.ChannelID, messages.DenyChannelFull, "Channel is full")
+			return nil
+		}
+		channelMoved = true
+		oldChannelID := target.ChannelID
+		s.users.SetChannel(targetSession, us.ChannelID)
+		target.ChannelID = us.ChannelID
+		s.invalidateACLCache()
+		s.UpdateChannelCrypto(oldChannelID)
+		s.UpdateChannelCrypto(us.ChannelID)
+		if targetConn := s.conn(targetSession); targetConn != nil {
+			if targetSession == c.SessionID() {
+				perms := s.aclPermissions(acl.SubjectOf(target), us.ChannelID)
+				_ = targetConn.WriteMessage(protocol.MessagePermissionQuery, &messages.PermissionQuery{
+					ChannelID:   us.ChannelID,
+					Permissions: uint32(perms),
+				})
 			}
 		}
+		// Resolved here, before UpdateUser — see maySpeak.
+		maySpeakAtDest = s.maySpeak(acl.SubjectOf(target), us.ChannelID)
 	}
 
-	wasRecording := target.Recording
+	var priorityChanged, suppressChanged bool
 	updated, ok := s.users.UpdateUser(targetSession, func(u *mumble.User) {
 		applySelfVoiceState(&u.VoiceState, &us)
 		applyAdminVoiceState(&u.VoiceState, &us)
 		if channelMoved {
-			// Murmur clears priority speaker on channel switch and mirrors Speak ACL
-			// into Suppress so clients show the correct suppressed state.
-			u.PrioritySpeaker = false
-			syncSuppressFromSpeakACL(u, s)
+			priorityChanged, suppressChanged = applyChannelEnterEffects(u, maySpeakAtDest)
 		}
-		if us.Has(messages.UserStateSetTexture) && len(us.Texture) > 0 {
+		// Presence, not emptiness, decides here: an empty texture or comment is the
+		// admin "reset this user's content" operation and has to actually clear it.
+		if us.Has(messages.UserStateSetTexture) {
 			u.Texture = append([]byte(nil), us.Texture...)
 		}
 		if us.Has(messages.UserStateSetComment) {
@@ -1169,7 +1521,7 @@ func (s *Server) handleUserState(msgType protocol.MessageType, payload []byte, c
 		if us.Has(messages.UserStateSetPluginIdentity) {
 			u.PluginIdentity = us.PluginIdentity
 		}
-		if us.Has(messages.UserStateSetPluginContext) && len(us.PluginContext) > 0 {
+		if us.Has(messages.UserStateSetPluginContext) {
 			u.PluginContext = append([]byte(nil), us.PluginContext...)
 		}
 	})
@@ -1177,29 +1529,52 @@ func (s *Server) handleUserState(msgType protocol.MessageType, payload []byte, c
 		return nil
 	}
 
-	state := userToState(&updated)
-	state.Actor = c.SessionID()
-	state.SetFields |= messages.UserStateSetActor
-	s.Broadcast(0, protocol.MessageUserState, state)
+	// Suppress/priority-speaker recomputation from a channel move is echoed only
+	// when it actually flipped (Server.cpp:2042-2055); if the client also asserted
+	// one of these itself in the same message, applyAdminVoiceState above already
+	// set the corresponding field, so this only ever adds what changed.
+	if priorityChanged {
+		us.PrioritySpeaker = false
+		us.SetFields |= messages.UserStateSetPrioritySpeaker
+	}
+	if suppressChanged {
+		us.Suppress = updated.Suppress
+		us.SetFields |= messages.UserStateSetSuppress
+	}
 
-	if wasRecording != updated.Recording {
+	// plugin_context/plugin_identity are applied to server state above but never
+	// transmitted to clients (Mumble.proto), and never set murmur's bBroadcast on
+	// their own (Messages.cpp:995-1007). Strip them before the broadcast gate.
+	us.PluginContext = nil
+	us.PluginIdentity = ""
+	us.SetFields &^= pluginUserStateFields
+
+	// A plugin-only (or otherwise non-broadcast) update must not emit a UserState
+	// with just session/actor — that would be a presence-only no-op spam.
+	if us.SetFields&broadcastUserStateFields == 0 {
+		return nil
+	}
+
+	us.Session = targetSession
+	us.Actor = c.SessionID()
+	us.SetFields |= messages.UserStateSetSession | messages.UserStateSetActor
+
+	s.Broadcast(0, protocol.MessageUserState, &us)
+
+	if us.Has(messages.UserStateSetRecording) {
 		s.broadcastRecordingAnnouncement(updated.Name, updated.Recording)
 	}
 	return nil
 }
 
-// syncSuppressFromSpeakACL mirrors murmur's userEnterChannel: Suppress tracks the
-// inverse of Speak permission so clients that key off the suppress flag stay in sync.
-func syncSuppressFromSpeakACL(u *mumble.User, s *Server) {
-	if s == nil || s.acl == nil {
-		return
-	}
-	maySpeak := s.acl.Check(u.UserID, u.ChannelID, mumble.PermissionSpeak)
-	if maySpeak == u.Suppress {
-		u.Suppress = !maySpeak
-	}
-}
+// version1_2_3 is Mumble 1.2.3 packed the same way Version.version_v2 packs
+// major/minor/patch (research/mumble/src/Version.h: fromComponents).
+const version1_2_3 = uint64(1)<<48 | uint64(2)<<32 | uint64(3)<<16
 
+// broadcastRecordingAnnouncement sends the legacy "started/stopped recording"
+// TextMessage only to clients older than 1.2.3 (Messages.cpp:1075); modern clients
+// render their own line from the recording field on the UserState broadcast, so
+// sending this to everyone would duplicate it.
 func (s *Server) broadcastRecordingAnnouncement(name string, recording bool) {
 	var text string
 	if recording {
@@ -1207,10 +1582,14 @@ func (s *Server) broadcastRecordingAnnouncement(name string, recording bool) {
 	} else {
 		text = fmt.Sprintf("User '%s' stopped recording", name)
 	}
-	s.Broadcast(0, protocol.MessageTextMessage, &messages.TextMessage{
-		TreeID:  []uint32{0},
-		Message: text,
-	})
+	tm := &messages.TextMessage{TreeID: []uint32{0}, Message: text}
+	s.connMu.RLock()
+	defer s.connMu.RUnlock()
+	for _, c := range s.conns {
+		if c.ClientVersion() < version1_2_3 {
+			_ = c.WriteMessage(protocol.MessageTextMessage, tm)
+		}
+	}
 }
 
 func (s *Server) handleCryptSetup(msgType protocol.MessageType, payload []byte, ctx interface{}) error {
@@ -1245,7 +1624,7 @@ func (s *Server) handleChannelState(msgType protocol.MessageType, payload []byte
 	if err := cs.Unmarshal(payload); err != nil {
 		return err
 	}
-	u, ok := s.users.GetUser(c.SessionID())
+	u, ok := s.users.Snapshot(c.SessionID())
 	if !ok {
 		return nil
 	}
@@ -1254,7 +1633,7 @@ func (s *Server) handleChannelState(msgType protocol.MessageType, payload []byte
 		if parent == 0 {
 			parent = s.chans.RootID()
 		}
-		if !s.acl.Check(u.UserID, parent, mumble.PermissionMakeChannel) {
+		if !s.aclCheck(acl.SubjectOf(u), parent, mumble.PermissionMakeChannel) {
 			_ = c.WriteMessage(protocol.MessagePermissionDenied, &messages.PermissionDenied{ChannelID: parent, Type: messages.DenyPermission, Reason: "Cannot create channel"})
 			return nil
 		}
@@ -1290,7 +1669,7 @@ func (s *Server) handleChannelState(msgType protocol.MessageType, payload []byte
 	if len(cs.LinksRemove) > 0 {
 		opts.LinksRemove = cs.LinksRemove
 	}
-	if !s.acl.Check(u.UserID, cs.ChannelID, mumble.PermissionWrite) {
+	if !s.aclCheck(acl.SubjectOf(u), cs.ChannelID, mumble.PermissionWrite) {
 		_ = c.WriteMessage(protocol.MessagePermissionDenied, &messages.PermissionDenied{ChannelID: cs.ChannelID, Type: messages.DenyPermission})
 		return nil
 	}
@@ -1311,11 +1690,11 @@ func (s *Server) handleChannelRemove(msgType protocol.MessageType, payload []byt
 	if err := cr.Unmarshal(payload); err != nil {
 		return err
 	}
-	u, ok := s.users.GetUser(c.SessionID())
+	u, ok := s.users.Snapshot(c.SessionID())
 	if !ok {
 		return nil
 	}
-	if !s.acl.Check(u.UserID, cr.ChannelID, mumble.PermissionWrite) {
+	if !s.aclCheck(acl.SubjectOf(u), cr.ChannelID, mumble.PermissionWrite) {
 		_ = c.WriteMessage(protocol.MessagePermissionDenied, &messages.PermissionDenied{ChannelID: cr.ChannelID, Type: messages.DenyPermission})
 		return nil
 	}
@@ -1327,14 +1706,37 @@ func (s *Server) handleChannelRemove(msgType protocol.MessageType, payload []byt
 	if parentID == 0 {
 		parentID = s.chans.RootID()
 	}
-	for _, mu := range s.users.ListByChannel(cr.ChannelID) {
-		s.users.SetChannel(mu.SessionID, parentID)
-		mu.ChannelID = parentID
-		if conn := s.conn(mu.SessionID); conn != nil {
-			conn.SetUser(mu.Name, mu.UserID, parentID)
+	for _, mu := range s.users.SnapshotByChannel(cr.ChannelID) {
+		sid := mu.SessionID
+		// Resolved before UpdateUser — see maySpeak.
+		maySpeak := s.maySpeak(acl.SubjectOf(mu), parentID)
+		s.users.SetChannel(sid, parentID)
+		var priorityChanged, suppressChanged bool
+		updated, ok := s.users.UpdateUser(sid, func(u *mumble.User) {
+			priorityChanged, suppressChanged = applyChannelEnterEffects(u, maySpeak)
+		})
+		if !ok {
+			continue
 		}
-		s.Broadcast(0, protocol.MessageUserState, userToState(mu))
+		// Minimal {session, channel_id} delta per moved user, plus suppress/priority
+		// speaker only when userEnterChannel actually flipped them, matching murmur
+		// rather than broadcasting a full snapshot.
+		state := &messages.UserState{
+			Session:   sid,
+			ChannelID: parentID,
+			SetFields: messages.UserStateSetSession | messages.UserStateSetChannelID,
+		}
+		if priorityChanged {
+			state.SetFields |= messages.UserStateSetPrioritySpeaker
+		}
+		if suppressChanged {
+			state.Suppress = updated.Suppress
+			state.SetFields |= messages.UserStateSetSuppress
+		}
+		s.Broadcast(0, protocol.MessageUserState, state)
 	}
+	// The channel these users were in is going away, and they have all moved.
+	s.invalidateACLCache()
 	if s.chans.Remove(cr.ChannelID) {
 		s.Broadcast(0, protocol.MessageChannelRemove, &cr)
 	}
@@ -1351,7 +1753,7 @@ func (s *Server) handleTextMessage(msgType protocol.MessageType, payload []byte,
 	if err := tm.Unmarshal(payload); err != nil {
 		return err
 	}
-	u, ok := s.users.GetUser(c.SessionID())
+	u, ok := s.users.Snapshot(c.SessionID())
 	if !ok {
 		return nil
 	}
@@ -1359,14 +1761,20 @@ func (s *Server) handleTextMessage(msgType protocol.MessageType, payload []byte,
 		_ = c.WriteMessage(protocol.MessagePermissionDenied, &messages.PermissionDenied{Type: messages.DenyTextTooLong, Reason: "Rate limit exceeded"})
 		return nil
 	}
+	// Murmur's isTextAllowed: reject anything over the advertised message_length
+	// rather than relaying it (Messages.cpp, Server::isTextAllowed).
+	if max := s.maxTextLength(); max > 0 && len(tm.Message) > max {
+		_ = c.WriteMessage(protocol.MessagePermissionDenied, &messages.PermissionDenied{Type: messages.DenyTextTooLong})
+		return nil
+	}
 	hasTarget := len(tm.Session) > 0 || len(tm.ChannelID) > 0 || len(tm.TreeID) > 0
 	if hasTarget {
 		for _, sid := range tm.Session {
-			targetUser, ok := s.users.GetUser(sid)
+			targetUser, ok := s.users.Snapshot(sid)
 			if !ok {
 				continue
 			}
-			if !s.acl.Check(u.UserID, targetUser.ChannelID, mumble.PermissionTextMessage) {
+			if !s.aclCheck(acl.SubjectOf(u), targetUser.ChannelID, mumble.PermissionTextMessage) {
 				_ = c.WriteMessage(protocol.MessagePermissionDenied, &messages.PermissionDenied{
 					ChannelID: targetUser.ChannelID, Type: messages.DenyPermission, Reason: "No text permission",
 				})
@@ -1374,18 +1782,18 @@ func (s *Server) handleTextMessage(msgType protocol.MessageType, payload []byte,
 			}
 		}
 		for _, cid := range tm.ChannelID {
-			if !s.acl.Check(u.UserID, cid, mumble.PermissionTextMessage) {
+			if !s.aclCheck(acl.SubjectOf(u), cid, mumble.PermissionTextMessage) {
 				_ = c.WriteMessage(protocol.MessagePermissionDenied, &messages.PermissionDenied{ChannelID: cid, Type: messages.DenyPermission, Reason: "No text permission"})
 				return nil
 			}
 		}
 		for _, tid := range tm.TreeID {
-			if !s.acl.Check(u.UserID, tid, mumble.PermissionTextMessage) {
+			if !s.aclCheck(acl.SubjectOf(u), tid, mumble.PermissionTextMessage) {
 				_ = c.WriteMessage(protocol.MessagePermissionDenied, &messages.PermissionDenied{ChannelID: tid, Type: messages.DenyPermission, Reason: "No text permission"})
 				return nil
 			}
 		}
-	} else if !s.acl.Check(u.UserID, u.ChannelID, mumble.PermissionTextMessage) {
+	} else if !s.aclCheck(acl.SubjectOf(u), u.ChannelID, mumble.PermissionTextMessage) {
 		_ = c.WriteMessage(protocol.MessagePermissionDenied, &messages.PermissionDenied{ChannelID: u.ChannelID, Type: messages.DenyPermission, Reason: "No text permission"})
 		return nil
 	}
@@ -1396,17 +1804,13 @@ func (s *Server) handleTextMessage(msgType protocol.MessageType, payload []byte,
 	}
 	if len(tm.ChannelID) > 0 {
 		for _, cid := range tm.ChannelID {
-			for _, mu := range s.users.ListByChannel(cid) {
-				recipients = append(recipients, mu.SessionID)
-			}
+			recipients = append(recipients, s.users.SessionIDsInChannel(cid)...)
 		}
 	}
 	if len(tm.TreeID) > 0 {
 		for _, tid := range tm.TreeID {
 			for _, cid := range s.chans.SubtreeIDs(tid) {
-				for _, mu := range s.users.ListByChannel(cid) {
-					recipients = append(recipients, mu.SessionID)
-				}
+				recipients = append(recipients, s.users.SessionIDsInChannel(cid)...)
 			}
 		}
 	}
@@ -1427,18 +1831,20 @@ func (s *Server) handleTextMessage(msgType protocol.MessageType, payload []byte,
 }
 
 func (s *Server) checkTextRateLimit(sessionID uint32) bool {
-	v, _ := s.textRateLimiter.LoadOrStore(sessionID, &textRateState{})
-	rs := v.(*textRateState)
-	rs.mu.Lock()
-	defer rs.mu.Unlock()
-	now := time.Now()
-	if now.Sub(rs.windowAt) > time.Second {
-		rs.windowAt = now
-		rs.count = 0
-	}
-	rs.count++
-	return rs.count <= 30
+	return rateLimitAllows(&s.textRateLimiter, sessionID, maxTextMessagesPerSecond)
 }
+
+// checkUserStateRateLimit throttles self-targeted UserState (murmur's RATELIMIT at
+// Messages.cpp:790). The budget is well above what a human toggling mute can
+// produce, so it only bites on a client stuck in an echo loop.
+func (s *Server) checkUserStateRateLimit(sessionID uint32) bool {
+	return rateLimitAllows(&s.userStateRateLimiter, sessionID, maxUserStatesPerSecond)
+}
+
+const (
+	maxTextMessagesPerSecond = 30
+	maxUserStatesPerSecond   = 10
+)
 
 func (s *Server) conn(sessionID uint32) *connection.Conn {
 	s.connMu.RLock()
@@ -1467,37 +1873,30 @@ func (s *Server) handleVoiceTarget(msgType protocol.MessageType, payload []byte,
 				recipients = append(recipients, sid)
 			}
 		}
-		for _, u := range s.users.ListByChannel(t.ChannelID) {
-			if !seen[u.SessionID] {
-				seen[u.SessionID] = true
-				recipients = append(recipients, u.SessionID)
+		addChannel := func(channelID uint32) {
+			for _, sid := range s.users.SessionIDsInChannel(channelID) {
+				if !seen[sid] {
+					seen[sid] = true
+					recipients = append(recipients, sid)
+				}
 			}
 		}
+		addChannel(t.ChannelID)
 		if t.Children {
 			cid := t.ChannelID
 			if cid == 0 {
-				if u, ok := s.users.GetUser(c.SessionID()); ok {
-					cid = u.ChannelID
+				if cur, ok := s.users.ChannelID(c.SessionID()); ok {
+					cid = cur
 				}
 			}
 			for _, subID := range s.chans.SubtreeIDs(cid) {
-				for _, u := range s.users.ListByChannel(subID) {
-					if !seen[u.SessionID] {
-						seen[u.SessionID] = true
-						recipients = append(recipients, u.SessionID)
-					}
-				}
+				addChannel(subID)
 			}
 		}
 		if t.Links {
 			if ch, ok := s.chans.GetChannel(t.ChannelID); ok {
 				for _, lid := range ch.Links {
-					for _, u := range s.users.ListByChannel(lid) {
-						if !seen[u.SessionID] {
-							seen[u.SessionID] = true
-							recipients = append(recipients, u.SessionID)
-						}
-					}
+					addChannel(lid)
 				}
 			}
 		}
@@ -1550,7 +1949,7 @@ func (s *Server) handleUDPTunnel(msgType protocol.MessageType, payload []byte, c
 			"first_bytes", hex.EncodeToString(payload[:min(len(payload), 16)]))
 
 		canSpeak := s.canSenderSpeak(sid)
-		u, uOk := s.users.GetUser(sid)
+		u, uOk := s.users.Snapshot(sid)
 		if uOk {
 			slog.Info("[VOICE-DEBUG] sender info",
 				"session", sid, "user_id", u.UserID, "channel_id", u.ChannelID,
@@ -1584,11 +1983,11 @@ func (s *Server) handleBanList(msgType protocol.MessageType, payload []byte, ctx
 		_ = bl.Unmarshal(payload)
 	}
 	if !bl.Query && len(bl.Bans) > 0 {
-		u, ok := s.users.GetUser(c.SessionID())
+		u, ok := s.users.Snapshot(c.SessionID())
 		if !ok {
 			return nil
 		}
-		if !s.acl.Check(u.UserID, s.chans.RootID(), mumble.PermissionBan) {
+		if !s.aclCheck(acl.SubjectOf(u), s.chans.RootID(), mumble.PermissionBan) {
 			_ = c.WriteMessage(protocol.MessagePermissionDenied, &messages.PermissionDenied{Type: messages.DenyPermission, Reason: "No ban permission"})
 			return nil
 		}
@@ -1629,13 +2028,13 @@ func (s *Server) handlePermissionQuery(msgType protocol.MessageType, payload []b
 	if len(payload) > 0 {
 		_ = pq.Unmarshal(payload)
 	}
-	u, ok := s.users.GetUser(c.SessionID())
+	u, ok := s.users.Snapshot(c.SessionID())
 	if !ok {
 		return nil
 	}
 	// ChannelID 0 = root channel (per Mumble protocol)
 	cid := pq.ChannelID
-	pq.Permissions = uint32(s.acl.EffectivePermissions(u.UserID, cid))
+	pq.Permissions = uint32(s.aclPermissions(acl.SubjectOf(u), cid))
 	_ = c.WriteMessage(protocol.MessagePermissionQuery, &pq)
 	return nil
 }
@@ -1655,13 +2054,21 @@ func (s *Server) handleRequestBlob(msgType protocol.MessageType, payload []byte,
 
 func (s *Server) sendRequestedBlobs(c *connection.Conn, rb *messages.RequestBlob) {
 	for _, sid := range rb.SessionTexture {
-		if u, ok := s.users.GetUser(sid); ok && len(u.Texture) > 0 {
-			_ = c.WriteMessage(protocol.MessageUserState, &messages.UserState{Session: sid, Texture: u.Texture})
+		if u, ok := s.users.Snapshot(sid); ok && len(u.Texture) > 0 {
+			_ = c.WriteMessage(protocol.MessageUserState, &messages.UserState{
+				Session:   sid,
+				Texture:   u.Texture,
+				SetFields: messages.UserStateSetSession | messages.UserStateSetTexture,
+			})
 		}
 	}
 	for _, sid := range rb.SessionComment {
-		if u, ok := s.users.GetUser(sid); ok && u.Comment != "" {
-			_ = c.WriteMessage(protocol.MessageUserState, &messages.UserState{Session: sid, Comment: u.Comment})
+		if u, ok := s.users.Snapshot(sid); ok && u.Comment != "" {
+			_ = c.WriteMessage(protocol.MessageUserState, &messages.UserState{
+				Session:   sid,
+				Comment:   u.Comment,
+				SetFields: messages.UserStateSetSession | messages.UserStateSetComment,
+			})
 		}
 	}
 	for _, cid := range rb.ChannelDescription {
@@ -1683,7 +2090,7 @@ func (s *Server) handleUserStats(msgType protocol.MessageType, payload []byte, c
 	if req.Session == 0 {
 		req.Session = c.SessionID()
 	}
-	if _, ok := s.users.GetUser(req.Session); ok {
+	if s.users.Exists(req.Session) {
 		_ = c.WriteMessage(protocol.MessageUserStats, &req)
 	}
 	return nil
@@ -1700,14 +2107,14 @@ func (s *Server) handleQueryUsers(msgType protocol.MessageType, payload []byte, 
 	}
 	resp := messages.QueryUsers{}
 	for _, sid := range qu.IDs {
-		if u, ok := s.users.GetUser(sid); ok {
+		if u, ok := s.users.Snapshot(sid); ok {
 			resp.Names = append(resp.Names, u.Name)
 		} else {
 			resp.Names = append(resp.Names, "")
 		}
 	}
 	for _, name := range qu.Names {
-		if u, ok := s.users.GetByName(name); ok {
+		if u, ok := s.users.SnapshotByName(name); ok {
 			resp.IDs = append(resp.IDs, u.SessionID)
 		} else {
 			resp.IDs = append(resp.IDs, 0)

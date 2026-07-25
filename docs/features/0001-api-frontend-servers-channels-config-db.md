@@ -31,7 +31,7 @@
 - Frontend: CreateChannelDialog, EditChannelDialog, context menu on channel nodes
 
 ### Phase 4: ACL and groups
-- Protocol correctness: Channel ID 0 = root channel (required by Mumble). `ChannelState` always emits `channel_id` (including 0); root omits `parent` (proto2 optional). `UserState` always emits `session` and `channel_id` (including users in root). Handlers (ACL, VoiceTarget, PermissionQuery) treat 0 as root. The channel manager auto-migrates pre-existing databases where root has the wrong ID.
+- Protocol correctness: Channel ID 0 = root channel (required by Mumble). `ChannelState` always emits `channel_id` (including 0); root omits `parent` (proto2 optional). `UserState` **snapshots** (join/roster sync via `userToState`) always emit `session` and `channel_id` (including users in root); **delta echoes** (mute toggles, ACL suppress refreshes, etc.) omit `channel_id` unless a move was requested — see [0007](0007-userstate-field-presence.md). Handlers (ACL, VoiceTarget, PermissionQuery) treat 0 as root. The channel manager auto-migrates pre-existing databases where root has the wrong ID.
 - DB models: `channel_groups`, `channel_acls` (with `eval_here`, `invert` for selector modifiers)
 - REST: GET/PUT /api/v1/servers/{id}/channels/{channelId}/acl
 - ACLDialog (editable) in channel context menu — add/remove groups and ACL rules, permission checkboxes

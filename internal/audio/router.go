@@ -13,32 +13,20 @@ type RecipientSender interface {
 
 // RouterConfig configures the audio router.
 type RouterConfig struct {
-	Sender           RecipientSender
-	GetChan          func(sessionID uint32) uint32
-	GetUsersInChan   func(channelID uint32) []uint32
-	GetVoiceTarget   func(sessionID uint32, targetID uint8) []uint32
-	GetLinkedChans   func(channelID uint32) []uint32
-	FilterRecipient  func(senderSessionID, recipientSessionID uint32) bool
-	CanSenderSpeak   func(senderSessionID uint32) bool
-	VoiceDebug       bool
+	Sender          RecipientSender
+	GetChan         func(sessionID uint32) uint32
+	GetUsersInChan  func(channelID uint32) []uint32
+	GetVoiceTarget  func(sessionID uint32, targetID uint8) []uint32
+	GetLinkedChans  func(channelID uint32) []uint32
+	FilterRecipient func(senderSessionID, recipientSessionID uint32) bool
+	CanSenderSpeak  func(senderSessionID uint32) bool
+	VoiceDebug      bool
 }
 
 // Router forwards voice packets to appropriate recipients.
 type Router struct {
 	mu     sync.RWMutex
 	config RouterConfig
-}
-
-// NewRouter creates an audio router.
-func NewRouter(sender RecipientSender, getChan func(uint32) uint32, getUsersInChan func(uint32) []uint32, getVoiceTarget func(uint32, uint8) []uint32) *Router {
-	return &Router{
-		config: RouterConfig{
-			Sender:         sender,
-			GetChan:        getChan,
-			GetUsersInChan: getUsersInChan,
-			GetVoiceTarget: getVoiceTarget,
-		},
-	}
 }
 
 // NewRouterWithConfig creates an audio router with full configuration.

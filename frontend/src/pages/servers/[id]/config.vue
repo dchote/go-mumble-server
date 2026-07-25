@@ -97,9 +97,36 @@
           autocomplete="off"
           class="mb-4"
         />
+        <v-text-field
+          v-model.number="form.max_text_message_length"
+          label="Max text message length (bytes, 0 = unlimited)"
+          type="number"
+          variant="outlined"
+          density="compact"
+          hide-details="auto"
+          autocomplete="off"
+          class="mb-4"
+        />
+        <v-text-field
+          v-model.number="form.max_image_message_length"
+          label="Max image message length (bytes, 0 = unlimited)"
+          type="number"
+          variant="outlined"
+          density="compact"
+          hide-details="auto"
+          autocomplete="off"
+          class="mb-4"
+        />
         <v-checkbox
           v-model="form.cert_required"
           label="Require client certificate"
+          hide-details
+          density="compact"
+          class="mb-4"
+        />
+        <v-checkbox
+          v-model="form.allow_recording"
+          label="Allow recording (clients that start recording are disconnected when disabled)"
           hide-details
           density="compact"
           class="mb-4"
@@ -142,6 +169,9 @@ const form = ref({
   default_channel: 0,
   cert_required: false,
   voice_debug: false,
+  allow_recording: true,
+  max_text_message_length: 5000,
+  max_image_message_length: 131072,
   channel_nesting_limit: 10,
   channel_count_limit: 1000,
 })
@@ -167,6 +197,9 @@ async function loadConfig() {
       default_channel: configRes.default_channel ?? 0,
       cert_required: configRes.cert_required ?? false,
       voice_debug: configRes.voice_debug ?? false,
+      allow_recording: configRes.allow_recording ?? true,
+      max_text_message_length: configRes.max_text_message_length ?? 5000,
+      max_image_message_length: configRes.max_image_message_length ?? 131072,
       channel_nesting_limit: configRes.channel_nesting_limit ?? 10,
       channel_count_limit: configRes.channel_count_limit ?? 1000,
     }
@@ -195,6 +228,9 @@ async function handleSave() {
         default_channel: form.value.default_channel,
         cert_required: form.value.cert_required,
         voice_debug: form.value.voice_debug,
+        allow_recording: form.value.allow_recording,
+        max_text_message_length: form.value.max_text_message_length,
+        max_image_message_length: form.value.max_image_message_length,
         channel_nesting_limit: form.value.channel_nesting_limit,
         channel_count_limit: form.value.channel_count_limit,
       }),

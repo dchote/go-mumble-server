@@ -5,16 +5,15 @@
 package ocb2
 
 import (
-	"crypto/aes"
 	"crypto/cipher"
 	"crypto/subtle"
 )
 
 const (
-	BlockSize  = 16
-	TagSize    = 16
-	NonceSize  = 16
-	MumbleTag  = 3 // Mumble uses 3-byte truncated tag
+	BlockSize = 16
+	TagSize   = 16
+	NonceSize = 16
+	MumbleTag = 3 // Mumble uses 3-byte truncated tag
 )
 
 func zeros(block []byte) {
@@ -133,9 +132,4 @@ func Decrypt(block cipher.Block, dst, src, nonce, tag []byte) bool {
 	xor(tmp[:], delta[:], checksum[:])
 	block.Encrypt(calcTag[:], tmp[:])
 	return subtle.ConstantTimeCompare(calcTag[:tagLen], tag) == 1
-}
-
-// NewBlock creates an AES-128 block cipher from a 16-byte key.
-func NewBlock(key []byte) (cipher.Block, error) {
-	return aes.NewCipher(key)
 }

@@ -22,8 +22,8 @@ The original Mumble server (Murmur) is a mature C++/Qt application that has serv
 
 The public Go packages provide the building blocks for any Mumble protocol implementation:
 
-- **`pkg/mumble`** — Core types: `Channel`, `User`, `Permission`, `ACL`, `VoiceTarget`, `TextMessage`. Shared by both client and server code.
-- **`pkg/mumble/protocol/messages`** — Native Go structs for all Mumble control messages and UDP audio messages (no protobuf).
+- **`pkg/mumble`** — Core types: `Channel`, `User`, `Permission`. Shared by both client and server code.
+- **`pkg/mumble/protocol/messages`** — Native Go structs for all Mumble control messages and UDP audio messages (no protobuf), including ACL, ban, voice target, text message, and version payloads on the wire.
 - **`pkg/mumble/protocol`** — Packet framing (read/write with the 6-byte TCP header), message type constants, handler table infrastructure, and varint codec for audio packets.
 - **`pkg/mumble/crypto`** — `CryptState` for UDP voice encryption/decryption. Supports both OCB2-AES128 (legacy) and AES-256-GCM (secure) modes.
 - **`pkg/mumble/audio`** — Audio packet parsing, voice target resolution types, and codec negotiation constants.
@@ -112,7 +112,8 @@ go-mumble-server targets full compatibility with the Mumble protocol as defined 
 - **Voice channel** — UDP with AEAD encryption, or tunneled over TCP
 - **Per-client negotiation** — Legacy (default), secure, or lite; standard Mumble clients use legacy automatically
 - **Version negotiation** — Supports protocol version exchange and codec negotiation (Opus preferred, CELT fallback)
-- **Proto2 field presence** — Outgoing `UserState` voice flags encode explicit `false` values so echo-driven clients (Mumla, Plumble) can unmute; mute/deaf cascade matches murmur ([0007](features/0007-userstate-field-presence.md))
+- **Proto2 field presence** — `UserState` uses Murmur's snapshot-vs-delta-echo rule: join/roster snapshots emit only `true` voice flags; mute-toggle echoes carry only the fields the client sent (plus cascade synthesised clears), so Mumla/Plumble can unmute without spamming unrelated presence events ([0007](features/0007-userstate-field-presence.md))
+- **Murmur authorization rules** — SuperUser immunity, temporary-channel mute escalation checks, cross-user comment/texture restrictions, channel capacity, message size limits, recording policy and `UserState` rate limiting all follow upstream behaviour ([0008](features/0008-userstate-authorization-and-limits.md))
 
 ## Target Users
 

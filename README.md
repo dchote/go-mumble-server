@@ -61,7 +61,7 @@ go-mumble-server re-imagines the Mumble server with modern priorities: a single 
 - **Handler table** — Message dispatch infrastructure usable by both server and client code
 - **CryptState** — AEAD encrypt/decrypt for UDP voice packets (OCB2-AES128 legacy, AES-256-GCM secure, or lite pass-through)
 - **Audio packets** — Parse/build audio packets with varint codec, codec IDs, voice targets
-- **Core types** — `Channel`, `User`, `Permission`, `ACL`, `VoiceTarget`, `TextMessage`, `BanEntry`
+- **Core types** — `Channel`, `User`, `Permission`; ACL, ban, voice target and text message data travels as `protocol/messages` structs
 - **No server dependencies** — Pure protocol primitives with zero coupling to server internals
 
 ## Requirements
@@ -112,6 +112,8 @@ CGO_ENABLED=1 go test -timeout=30s ./...
 ```
 
 Use `-timeout=30s` to avoid hanging. For race detection: `CGO_ENABLED=1 go test -race -timeout=60s ./...`
+
+`pkg/mumble/protocol/messages` additionally runs a schema conformance lint against a vendored copy of the upstream `Mumble.proto` on every test run, catching wire-format drift (wrong field number/type, or an upstream field nobody triaged) before it ships. See [docs/architecture/protocol-encoding.md](docs/architecture/protocol-encoding.md#schema-conformance-lint).
 
 ## Running
 
@@ -323,11 +325,7 @@ go-mumble-server/
 │       ├── audio/               # Audio packets, varint, codec IDs
 │       ├── channel.go           # Channel type
 │       ├── user.go              # User type
-│       ├── permission.go        # Permission bitmask
-│       ├── acl.go               # ACL / Group types
-│       ├── voicetarget.go       # VoiceTarget type
-│       ├── textmessage.go       # TextMessage type
-│       └── ban.go               # BanEntry type
+│       └── permission.go        # Permission bitmask
 ├── internal/                    # ── Server Implementation ──
 │   ├── server/                  # Virtual server lifecycle
 │   ├── mumble/                  # Mumble protocol handlers
@@ -363,6 +361,7 @@ go-mumble-server/
 ### Protocol
 
 - [Control Messages](docs/protocol/control-messages.md) — TCP message catalog (types 0–26)
+- [Protocol Encoding](docs/architecture/protocol-encoding.md) — Native Go wire encoding, proto2 field presence, snapshot-vs-delta-echo rule, schema conformance lint
 - [Voice Data](docs/protocol/voice-data.md) — UDP audio packet format and routing
 - [Security Modes](docs/protocol/security-modes.md) — Per-client crypto tiers (legacy, secure, lite) and mixed-mode enforcement
 - [Encryption](docs/protocol/encryption.md) — TLS, AEAD ciphers, password hashing
@@ -396,11 +395,11 @@ go build -o test-client ./cmd/test-client
 go-mumble-server is compatible with any client implementing the standard Mumble protocol:
 
 - [Mumble](https://www.mumble.info/) (Desktop — Windows, macOS, Linux)
-- [Mumla](https://f-droid.org/packages/se.lublin.mumla/) (Android, F-Droid)
-- Plumble and other echo-driven Android clients (proto2 field presence on mute/deaf clears)
+- [Mumla](https://f-droid.org/packages/se.lublin.mumla/) (Android, F-Droid) — Humla-based; mute UI follows the server's `self_mute`/`self_deaf` echo
+- Plumble and other Humla-based Android clients
 - Custom Go clients built on `pkg/mumble/`
 
-See [docs/features/0007-userstate-field-presence.md](docs/features/0007-userstate-field-presence.md) for mute/deaf wire semantics.
+See [docs/features/0007-userstate-field-presence.md](docs/features/0007-userstate-field-presence.md) for the Murmur snapshot-vs-delta-echo rule and Humla mute semantics, and [0008](docs/features/0008-userstate-authorization-and-limits.md) for the authorization rules, content limits and recording policy that go with them.
 
 ## License
 

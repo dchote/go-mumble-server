@@ -21,15 +21,18 @@ type MetaConfig struct {
 
 // ServerConfigData holds per-virtual-server config from DB.
 type ServerConfigData struct {
-	MaxUsers            int
-	MaxBandwidth        int
-	WelcomeText         string
-	ServerPassword      string
-	DefaultChannel      int
-	CertRequired        bool
-	ChannelNestingLimit int
-	ChannelCountLimit   int
-	VoiceDebug          bool
+	MaxUsers              int
+	MaxBandwidth          int
+	WelcomeText           string
+	ServerPassword        string
+	DefaultChannel        int
+	CertRequired          bool
+	ChannelNestingLimit   int
+	ChannelCountLimit     int
+	VoiceDebug            bool
+	AllowRecording        bool
+	MaxTextMessageLength  int
+	MaxImageMessageLength int
 }
 
 // LoadMetaConfig loads meta_config from DB (row ID 1).
@@ -80,26 +83,32 @@ func LoadServerConfig(db *gorm.DB, serverID uint) (*ServerConfigData, error) {
 		return nil, err
 	}
 	return &ServerConfigData{
-		MaxUsers:            sc.MaxUsers,
-		MaxBandwidth:        sc.MaxBandwidth,
-		WelcomeText:         sc.WelcomeText,
-		ServerPassword:      sc.ServerPassword,
-		DefaultChannel:      sc.DefaultChannel,
-		CertRequired:        sc.CertRequired,
-		ChannelNestingLimit: sc.ChannelNestingLimit,
-		ChannelCountLimit:   sc.ChannelCountLimit,
-		VoiceDebug:          sc.VoiceDebug,
+		MaxUsers:              sc.MaxUsers,
+		MaxBandwidth:          sc.MaxBandwidth,
+		WelcomeText:           sc.WelcomeText,
+		ServerPassword:        sc.ServerPassword,
+		DefaultChannel:        sc.DefaultChannel,
+		CertRequired:          sc.CertRequired,
+		ChannelNestingLimit:   sc.ChannelNestingLimit,
+		ChannelCountLimit:     sc.ChannelCountLimit,
+		VoiceDebug:            sc.VoiceDebug,
+		AllowRecording:        sc.AllowRecording,
+		MaxTextMessageLength:  sc.MaxTextMessageLength,
+		MaxImageMessageLength: sc.MaxImageMessageLength,
 	}, nil
 }
 
 // DefaultServerConfig returns default server config values.
 func DefaultServerConfig() *ServerConfigData {
 	return &ServerConfigData{
-		MaxUsers:            100,
-		MaxBandwidth:        72000,
-		ChannelNestingLimit: 10,
-		ChannelCountLimit:   1000,
-		VoiceDebug:          false,
+		MaxUsers:              100,
+		MaxBandwidth:          72000,
+		ChannelNestingLimit:   10,
+		ChannelCountLimit:     1000,
+		VoiceDebug:            false,
+		AllowRecording:        true,
+		MaxTextMessageLength:  5000,
+		MaxImageMessageLength: 131072,
 	}
 }
 
@@ -107,11 +116,11 @@ func DefaultServerConfig() *ServerConfigData {
 func ConfigForServer(meta *MetaConfig, server *ServerConfigData, bootstrap *Config) *Config {
 	if meta == nil {
 		meta = &MetaConfig{
-			Host:         "0.0.0.0",
-			MumblePort:   64738,
-			RESTPort:     64730,
-			JWTIssuer:    "go-mumble-server",
-			JWTAudience:  "go-mumble-server-api",
+			Host:          "0.0.0.0",
+			MumblePort:    64738,
+			RESTPort:      64730,
+			JWTIssuer:     "go-mumble-server",
+			JWTAudience:   "go-mumble-server-api",
 			JWTExpiryDays: 30,
 		}
 	}
@@ -119,23 +128,26 @@ func ConfigForServer(meta *MetaConfig, server *ServerConfigData, bootstrap *Conf
 		server = DefaultServerConfig()
 	}
 	cfg := &Config{
-		Host:           meta.Host,
-		MumblePort:     meta.MumblePort,
-		RESTPort:       meta.RESTPort,
-		Bonjour:        meta.Bonjour,
-		RegisterName:   meta.RegisterName,
-		JWTIssuer:      meta.JWTIssuer,
-		JWTAudience:    meta.JWTAudience,
-		JWTExpiryDays:  meta.JWTExpiryDays,
-		MaxUsers:       server.MaxUsers,
-		MaxBandwidth:   server.MaxBandwidth,
-		WelcomeText:    server.WelcomeText,
-		ServerPassword: server.ServerPassword,
-		DefaultChannel: server.DefaultChannel,
-		CertRequired:   server.CertRequired,
-		ChannelDepth:   server.ChannelNestingLimit,
-		ChannelCount:   server.ChannelCountLimit,
-		VoiceDebug:     server.VoiceDebug,
+		Host:                  meta.Host,
+		MumblePort:            meta.MumblePort,
+		RESTPort:              meta.RESTPort,
+		Bonjour:               meta.Bonjour,
+		RegisterName:          meta.RegisterName,
+		JWTIssuer:             meta.JWTIssuer,
+		JWTAudience:           meta.JWTAudience,
+		JWTExpiryDays:         meta.JWTExpiryDays,
+		MaxUsers:              server.MaxUsers,
+		MaxBandwidth:          server.MaxBandwidth,
+		WelcomeText:           server.WelcomeText,
+		ServerPassword:        server.ServerPassword,
+		DefaultChannel:        server.DefaultChannel,
+		CertRequired:          server.CertRequired,
+		ChannelDepth:          server.ChannelNestingLimit,
+		ChannelCount:          server.ChannelCountLimit,
+		VoiceDebug:            server.VoiceDebug,
+		AllowRecording:        server.AllowRecording,
+		MaxTextMessageLength:  server.MaxTextMessageLength,
+		MaxImageMessageLength: server.MaxImageMessageLength,
 	}
 	if bootstrap != nil {
 		cfg.DatabasePath = bootstrap.DatabasePath
@@ -188,16 +200,19 @@ func EnsureServerConfig(db *gorm.DB, serverID uint, cfg *Config) error {
 		return err
 	}
 	sc = models.ServerConfig{
-		ServerID:            serverID,
-		WelcomeText:         cfg.WelcomeText,
-		MaxUsers:            cfg.MaxUsers,
-		MaxBandwidth:        cfg.MaxBandwidth,
-		ChannelNestingLimit: cfg.ChannelDepth,
-		ChannelCountLimit:   cfg.ChannelCount,
-		DefaultChannel:      cfg.DefaultChannel,
-		CertRequired:        cfg.CertRequired,
-		ServerPassword:      cfg.ServerPassword,
-		VoiceDebug:          cfg.VoiceDebug,
+		ServerID:              serverID,
+		WelcomeText:           cfg.WelcomeText,
+		MaxUsers:              cfg.MaxUsers,
+		MaxBandwidth:          cfg.MaxBandwidth,
+		ChannelNestingLimit:   cfg.ChannelDepth,
+		ChannelCountLimit:     cfg.ChannelCount,
+		DefaultChannel:        cfg.DefaultChannel,
+		CertRequired:          cfg.CertRequired,
+		ServerPassword:        cfg.ServerPassword,
+		VoiceDebug:            cfg.VoiceDebug,
+		AllowRecording:        cfg.AllowRecording,
+		MaxTextMessageLength:  cfg.MaxTextMessageLength,
+		MaxImageMessageLength: cfg.MaxImageMessageLength,
 	}
 	return db.Create(&sc).Error
 }
