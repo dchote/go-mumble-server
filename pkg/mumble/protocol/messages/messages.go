@@ -31,18 +31,18 @@ const (
 type DenyType uint32
 
 const (
-	DenyText                DenyType = 0
-	DenyPermission          DenyType = 1
-	DenySuperUser           DenyType = 2
-	DenyChannelName         DenyType = 3
-	DenyTextTooLong         DenyType = 4
+	DenyText                 DenyType = 0
+	DenyPermission           DenyType = 1
+	DenySuperUser            DenyType = 2
+	DenyChannelName          DenyType = 3
+	DenyTextTooLong          DenyType = 4
 	DenyH9K                  DenyType = 5
-	DenyTemporaryChannel    DenyType = 6
-	DenyMissingCertificate  DenyType = 7
-	DenyUserName            DenyType = 8
-	DenyChannelFull         DenyType = 9
-	DenyNestingLimit        DenyType = 10
-	DenyChannelCountLimit   DenyType = 11
+	DenyTemporaryChannel     DenyType = 6
+	DenyMissingCertificate   DenyType = 7
+	DenyUserName             DenyType = 8
+	DenyChannelFull          DenyType = 9
+	DenyNestingLimit         DenyType = 10
+	DenyChannelCountLimit    DenyType = 11
 	DenyChannelListenerLimit DenyType = 12
-	DenyUserListenerLimit   DenyType = 13
+	DenyUserListenerLimit    DenyType = 13
 )

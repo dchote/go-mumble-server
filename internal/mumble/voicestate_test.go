@@ -132,6 +132,57 @@ func TestApplyAdminVoiceState(t *testing.T) {
 	}
 }
 
+// The regression test for issue #1: murmur mutates the inbound message in place so
+// synthesised changes reach the broadcast (Messages.cpp:979-993). A self_deaf=true
+// request must gain explicit self_mute presence on us itself, not just on vs.
+func TestApplySelfVoiceState_MutatesMessageWithSynthesisedChanges(t *testing.T) {
+	vs := mumble.VoiceState{}
+	us := &messages.UserState{SelfDeaf: true, SetFields: messages.UserStateSetSelfDeaf}
+	applySelfVoiceState(&vs, us)
+
+	if !us.Has(messages.UserStateSetSelfMute) || !us.SelfMute {
+		t.Error("self_deaf=true must synthesise an explicit self_mute=true on the message")
+	}
+}
+
+// Unmuting while deafened must synthesise an explicit self_deaf=false on the message,
+// otherwise echo-driven clients (Mumla, Plumble) never learn they were undeafened.
+func TestApplySelfVoiceState_UnmuteSynthesisesSelfDeafFalse(t *testing.T) {
+	vs := mumble.VoiceState{SelfMute: true, SelfDeaf: true}
+	us := &messages.UserState{SetFields: messages.UserStateSetSelfMute} // self_mute=false
+	applySelfVoiceState(&vs, us)
+
+	if !us.Has(messages.UserStateSetSelfDeaf) || us.SelfDeaf {
+		t.Error("self_mute=false while deafened must synthesise an explicit self_deaf=false")
+	}
+}
+
+// Undeafening alone must NOT touch self_mute on the message: murmur only synthesises
+// self_mute when deafening (true), never when un-deafening, so a client that was both
+// muted and deafened stays muted and the broadcast says nothing about mute at all.
+func TestApplySelfVoiceState_UndeafenAloneDoesNotTouchSelfMute(t *testing.T) {
+	vs := mumble.VoiceState{SelfMute: true, SelfDeaf: true}
+	us := &messages.UserState{SetFields: messages.UserStateSetSelfDeaf} // self_deaf=false
+	applySelfVoiceState(&vs, us)
+
+	if vs.SelfMute != true {
+		t.Error("self_mute must remain true after undeafen-only")
+	}
+	if us.Has(messages.UserStateSetSelfMute) {
+		t.Error("undeafen-only must not add a self_mute presence bit to the message")
+	}
+}
+
+func TestApplyAdminVoiceState_MutatesMessageWithSynthesisedChanges(t *testing.T) {
+	vs := mumble.VoiceState{}
+	us := &messages.UserState{Deaf: true, SetFields: messages.UserStateSetDeaf}
+	applyAdminVoiceState(&vs, us)
+
+	if !us.Has(messages.UserStateSetMute) || !us.Mute {
+		t.Error("deaf=true must synthesise an explicit mute=true on the message")
+	}
+}
+
 func TestApplyAdminVoiceState_SuppressAndPrioritySpeaker(t *testing.T) {
 	vs := mumble.VoiceState{Suppress: true}
 	applyAdminVoiceState(&vs, &messages.UserState{
@@ -146,10 +197,62 @@ func TestApplyAdminVoiceState_SuppressAndPrioritySpeaker(t *testing.T) {
 	}
 }
 
-// A self-muted user's audio must not be relayed, matching murmur's voice gate.
-func TestUserToState_BroadcastsClearedFlagsExplicitly(t *testing.T) {
+// applyChannelEnterEffects mirrors murmur's userEnterChannel: priority speaker is
+// always cleared on a channel move, but only reported as changed if it was actually
+// set, matching Server.cpp:2042-2055's `if (p->bPrioritySpeaker) { ...; announce }`.
+func TestApplyChannelEnterEffects_ClearsPrioritySpeakerWhenSet(t *testing.T) {
+	u := &mumble.User{VoiceState: mumble.VoiceState{PrioritySpeaker: true}}
+	priorityChanged, _ := applyChannelEnterEffects(u, true)
+	if !priorityChanged || u.PrioritySpeaker {
+		t.Error("priority speaker must be cleared and reported as changed")
+	}
+}
+
+func TestApplyChannelEnterEffects_NoChangeWhenAlreadyClear(t *testing.T) {
+	u := &mumble.User{}
+	priorityChanged, suppressChanged := applyChannelEnterEffects(u, true)
+	if priorityChanged {
+		t.Error("priority speaker already false must not be reported as changed")
+	}
+	if suppressChanged {
+		t.Error("suppress must not change when maySpeak already matches !suppress")
+	}
+}
+
+func TestApplySuppressFromSpeak(t *testing.T) {
+	tests := []struct {
+		name          string
+		startSuppress bool
+		maySpeak      bool
+		wantSuppress  bool
+		wantChanged   bool
+	}{
+		{"denied speak while unsuppressed flips to suppressed", false, false, true, true},
+		{"granted speak while suppressed flips to unsuppressed", true, true, false, true},
+		{"already suppressed and denied speak: no change", true, false, true, false},
+		{"already unsuppressed and granted speak: no change", false, true, false, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			u := &mumble.User{VoiceState: mumble.VoiceState{Suppress: tt.startSuppress}}
+			changed := applySuppressFromSpeak(u, tt.maySpeak)
+			if changed != tt.wantChanged || u.Suppress != tt.wantSuppress {
+				t.Errorf("changed=%v Suppress=%v, want changed=%v Suppress=%v",
+					changed, u.Suppress, tt.wantChanged, tt.wantSuppress)
+			}
+		})
+	}
+}
+
+// userToState is a snapshot, not a delta: presence here means "this flag is set", so
+// a freshly-connected user with every flag at its zero value must carry no voice
+// presence bits at all. Broadcasting all seven regardless of value was the v0.1.4
+// regression (every routine update looked like a burst of mute/deaf/suppress/
+// priority-speaker/recording changes to clients that log from field presence, e.g.
+// the official client's MainWindow::msgUserState).
+func TestUserToState_OmitsFalseVoiceFlags(t *testing.T) {
 	u := &mumble.User{SessionID: 2, ChannelID: 1}
-	state := userToState(u)
+	state := userToState(*u)
 
 	for _, tt := range []struct {
 		name string
@@ -163,14 +266,83 @@ func TestUserToState_BroadcastsClearedFlagsExplicitly(t *testing.T) {
 		{"priority_speaker", messages.UserStateSetPrioritySpeaker},
 		{"recording", messages.UserStateSetRecording},
 	} {
-		if !state.Has(tt.bit) {
-			t.Errorf("%s presence bit not set on broadcast state", tt.name)
+		if state.Has(tt.bit) {
+			t.Errorf("%s presence bit set on a snapshot with everything false", tt.name)
 		}
+	}
+
+	// Session and channel_id are always present on a snapshot.
+	if !state.Has(messages.UserStateSetSession) || !state.Has(messages.UserStateSetChannelID) {
+		t.Error("session/channel_id must always be present on a snapshot")
 	}
 
 	// Name and comment stay omit-if-empty to avoid spurious client-side rename and
 	// comment-reset events.
 	if state.Has(messages.UserStateSetName) || state.Has(messages.UserStateSetComment) {
 		t.Error("name/comment should not carry presence bits on routine updates")
+	}
+}
+
+// True voice flags are emitted, and deaf/mute plus self_deaf/self_mute are mutually
+// exclusive on the wire, matching murmur's `if (deaf) ... else if (mute) ...`
+// (Messages.cpp:511-524) exactly.
+func TestUserToState_EmitsTrueVoiceFlagsWithElseIfExclusivity(t *testing.T) {
+	u := &mumble.User{
+		SessionID: 2,
+		VoiceState: mumble.VoiceState{
+			Deaf: true, Mute: true, // deaf implies mute is not separately reported
+			SelfDeaf: true, SelfMute: true, // same for self_deaf/self_mute
+			Suppress: true, PrioritySpeaker: true, Recording: true,
+		},
+	}
+	state := userToState(*u)
+
+	if !state.Deaf || !state.Has(messages.UserStateSetDeaf) {
+		t.Error("deaf must be present and true")
+	}
+	if state.Mute || state.Has(messages.UserStateSetMute) {
+		t.Error("mute must not be separately reported when deaf is true")
+	}
+	if !state.SelfDeaf || !state.Has(messages.UserStateSetSelfDeaf) {
+		t.Error("self_deaf must be present and true")
+	}
+	if state.SelfMute || state.Has(messages.UserStateSetSelfMute) {
+		t.Error("self_mute must not be separately reported when self_deaf is true")
+	}
+	for _, tt := range []struct {
+		name string
+		bit  uint32
+		val  bool
+	}{
+		{"suppress", messages.UserStateSetSuppress, state.Suppress},
+		{"priority_speaker", messages.UserStateSetPrioritySpeaker, state.PrioritySpeaker},
+		{"recording", messages.UserStateSetRecording, state.Recording},
+	} {
+		if !state.Has(tt.bit) || !tt.val {
+			t.Errorf("%s must be present and true", tt.name)
+		}
+	}
+}
+
+// Muted-but-not-deaf and self-muted-but-not-self-deaf take the mute/self_mute branch
+// of the else-if.
+func TestUserToState_EmitsMuteWithoutDeaf(t *testing.T) {
+	u := &mumble.User{
+		SessionID:  2,
+		VoiceState: mumble.VoiceState{Mute: true, SelfMute: true},
+	}
+	state := userToState(*u)
+
+	if !state.Mute || !state.Has(messages.UserStateSetMute) {
+		t.Error("mute must be present and true")
+	}
+	if state.Has(messages.UserStateSetDeaf) {
+		t.Error("deaf must not be present when false")
+	}
+	if !state.SelfMute || !state.Has(messages.UserStateSetSelfMute) {
+		t.Error("self_mute must be present and true")
+	}
+	if state.Has(messages.UserStateSetSelfDeaf) {
+		t.Error("self_deaf must not be present when false")
 	}
 }

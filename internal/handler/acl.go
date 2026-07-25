@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strconv"
 
+	"github.com/dchote/go-mumble-server/internal/acl"
 	"github.com/dchote/go-mumble-server/internal/database/models"
 	"github.com/go-chi/chi/v5"
 	"gorm.io/gorm"
@@ -12,8 +13,8 @@ import (
 
 // ACLHandler handles ACL and group REST endpoints.
 type ACLHandler struct {
-	db              *gorm.DB
-	OnACLChange     func(serverID uint) // called after PUT to invalidate cache
+	db          *gorm.DB
+	OnACLChange func(serverID uint) // called after PUT to invalidate cache
 }
 
 // NewACLHandler creates an ACLHandler.
@@ -28,26 +29,26 @@ type ACLResponse struct {
 }
 
 type ACLGroupResp struct {
-	ID            uint   `json:"id"`
-	Name          string `json:"name"`
-	Inherit       bool   `json:"inherit"`
-	Inheritable   bool   `json:"inheritable"`
+	ID            uint     `json:"id"`
+	Name          string   `json:"name"`
+	Inherit       bool     `json:"inherit"`
+	Inheritable   bool     `json:"inheritable"`
 	AddUserIDs    []uint32 `json:"add_user_ids"`
 	RemoveUserIDs []uint32 `json:"remove_user_ids"`
 }
 
 type ACLEntryResp struct {
-	ID        uint   `json:"id"`
-	Priority  int    `json:"priority"`
-	ApplyHere bool   `json:"apply_here"`
-	ApplySubs bool   `json:"apply_subs"`
-	UserID    *int32 `json:"user_id,omitempty"`
-	GroupName string `json:"group_name"`
+	ID          uint   `json:"id"`
+	Priority    int    `json:"priority"`
+	ApplyHere   bool   `json:"apply_here"`
+	ApplySubs   bool   `json:"apply_subs"`
+	UserID      *int32 `json:"user_id,omitempty"`
+	GroupName   string `json:"group_name"`
 	AccessToken string `json:"access_token"`
-	EvalHere  bool   `json:"eval_here"`
-	Invert    bool   `json:"invert"`
-	Grant     uint32 `json:"grant"`
-	Deny      uint32 `json:"deny"`
+	EvalHere    bool   `json:"eval_here"`
+	Invert      bool   `json:"invert"`
+	Grant       uint32 `json:"grant"`
+	Deny        uint32 `json:"deny"`
 }
 
 // Get returns ACL and groups for a channel.
@@ -152,7 +153,7 @@ func (h *ACLHandler) Put(w http.ResponseWriter, r *http.Request) {
 				AddUserIDs:    models.Uint32Slice(g.AddUserIDs),
 				RemoveUserIDs: models.Uint32Slice(g.RemoveUserIDs),
 			}
-			if err := tx.Create(&row).Error; err != nil {
+			if err := acl.CreateGroup(tx, &row); err != nil {
 				return err
 			}
 		}
@@ -171,7 +172,7 @@ func (h *ACLHandler) Put(w http.ResponseWriter, r *http.Request) {
 				Grant:       a.Grant,
 				Deny:        a.Deny,
 			}
-			if err := tx.Create(&row).Error; err != nil {
+			if err := acl.CreateACL(tx, &row); err != nil {
 				return err
 			}
 		}

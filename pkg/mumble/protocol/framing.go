@@ -52,4 +52,3 @@ func ReadPacket(r io.Reader) (MessageType, []byte, error) {
 	}
 	return msgType, payload, nil
 }
-

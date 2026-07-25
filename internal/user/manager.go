@@ -37,54 +37,49 @@ func NewManager(db *gorm.DB, maxUsers int) *Manager {
 	}
 }
 
-// Add adds a connected user. Returns false if username in use or server full.
-func (m *Manager) Add(u *mumble.User) bool {
+// Add takes ownership of a connected user and returns the stored record with its
+// allocated session ID. Returns false if the username is in use or the server is
+// full. The manager copies the record, so the caller's value never aliases the
+// live one.
+func (m *Manager) Add(u mumble.User) (mumble.User, bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.byName[u.Name] != nil {
-		return false
+		return mumble.User{}, false
 	}
 	if len(m.bySession) >= m.maxUsers && m.maxUsers > 0 {
-		return false
+		return mumble.User{}, false
 	}
 	sid, ok := m.pool.Alloc()
 	if !ok {
-		return false
+		return mumble.User{}, false
 	}
-	u.SessionID = sid
-	m.bySession[sid] = u
-	m.byName[u.Name] = u
-	return true
+	stored := cloneUser(&u)
+	stored.SessionID = sid
+	m.bySession[sid] = &stored
+	m.byName[stored.Name] = &stored
+	return cloneUser(&stored), true
 }
 
-// Remove removes a user by session ID.
-func (m *Manager) Remove(sessionID uint32) *mumble.User {
+// Remove removes a user by session ID, returning a copy of the removed record.
+func (m *Manager) Remove(sessionID uint32) (mumble.User, bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	u := m.bySession[sessionID]
 	if u == nil {
-		return nil
+		return mumble.User{}, false
 	}
 	delete(m.bySession, sessionID)
 	delete(m.byName, u.Name)
 	m.pool.Free(sessionID)
-	return u
+	return cloneUser(u), true
 }
 
-// GetUser returns a user by session ID.
-func (m *Manager) GetUser(sessionID uint32) (*mumble.User, bool) {
+// Exists reports whether a session is connected.
+func (m *Manager) Exists(sessionID uint32) bool {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	u, ok := m.bySession[sessionID]
-	return u, ok
-}
-
-// GetByName returns a user by username.
-func (m *Manager) GetByName(name string) (*mumble.User, bool) {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	u, ok := m.byName[name]
-	return u, ok
+	return m.bySession[sessionID] != nil
 }
 
 // SessionIDsInChannel returns session IDs of users in the given channel.
@@ -100,28 +95,17 @@ func (m *Manager) SessionIDsInChannel(channelID uint32) []uint32 {
 	return out
 }
 
-// ListByChannel returns users in the given channel.
-func (m *Manager) ListByChannel(channelID uint32) []*mumble.User {
+// CountInChannel returns how many users occupy the given channel.
+func (m *Manager) CountInChannel(channelID uint32) int {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	var out []*mumble.User
+	n := 0
 	for _, u := range m.bySession {
 		if u.ChannelID == channelID {
-			out = append(out, u)
+			n++
 		}
 	}
-	return out
-}
-
-// ListAll returns all connected users.
-func (m *Manager) ListAll() []*mumble.User {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	out := make([]*mumble.User, 0, len(m.bySession))
-	for _, u := range m.bySession {
-		out = append(out, u)
-	}
-	return out
+	return n
 }
 
 // Count returns the number of connected users.
@@ -140,10 +124,13 @@ func (m *Manager) SetPing(sessionID uint32, ping float32) {
 	}
 }
 
-// Snapshot returns a deep copy of a user's record. Slice fields (texture, plugin
-// context, access tokens) are cloned so later mutations of the live user cannot
-// race with readers that hold the copy. Prefer this over GetUser for any read that
-// outlives the manager lock.
+// The manager never hands out *mumble.User. Every record it owns can be mutated
+// concurrently by UpdateUser, so a caller holding a pointer would be reading
+// through an unsynchronised alias the moment the manager lock is released. All
+// reads therefore go through one of the Snapshot* accessors below, which copy
+// under the lock (deeply, for the slice fields). Writes go through UpdateUser.
+
+// Snapshot returns a deep copy of a user's record.
 func (m *Manager) Snapshot(sessionID uint32) (mumble.User, bool) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -152,6 +139,55 @@ func (m *Manager) Snapshot(sessionID uint32) (mumble.User, bool) {
 		return mumble.User{}, false
 	}
 	return cloneUser(u), true
+}
+
+// SnapshotByName returns a deep copy of the user with the given username.
+func (m *Manager) SnapshotByName(name string) (mumble.User, bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	u := m.byName[name]
+	if u == nil {
+		return mumble.User{}, false
+	}
+	return cloneUser(u), true
+}
+
+// SnapshotByUserID returns a deep copy of the first connected session belonging to
+// a registered user ID. Used by the ACL evaluator, which resolves @in/@out/@sub and
+// token groups against the user's live channel.
+func (m *Manager) SnapshotByUserID(userID uint32) (mumble.User, bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	for _, u := range m.bySession {
+		if u.UserID == userID {
+			return cloneUser(u), true
+		}
+	}
+	return mumble.User{}, false
+}
+
+// SnapshotAll returns deep copies of every connected user.
+func (m *Manager) SnapshotAll() []mumble.User {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	out := make([]mumble.User, 0, len(m.bySession))
+	for _, u := range m.bySession {
+		out = append(out, cloneUser(u))
+	}
+	return out
+}
+
+// SnapshotByChannel returns deep copies of the users in the given channel.
+func (m *Manager) SnapshotByChannel(channelID uint32) []mumble.User {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	var out []mumble.User
+	for _, u := range m.bySession {
+		if u.ChannelID == channelID {
+			out = append(out, cloneUser(u))
+		}
+	}
+	return out
 }
 
 // VoiceState returns a copy of a user's audio-routing flags. Used on the per-packet
@@ -223,12 +259,6 @@ func (m *Manager) SetChannel(sessionID uint32, channelID uint32) {
 	if u := m.bySession[sessionID]; u != nil {
 		u.ChannelID = channelID
 	}
-}
-
-// RegisterDBUser looks up a management/registered user by username.
-func (m *Manager) RegisterDBUser(username string) (userID uint32, passwordHash string, found bool) {
-	id, hash, _, found := m.LookupAPIUser(username)
-	return id, hash, found
 }
 
 // LookupAPIUser looks up an API user by username, returning id, password hash, role, and found.

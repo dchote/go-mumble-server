@@ -3,8 +3,8 @@ package models
 // MetaConfig represents process-level (global) configuration.
 // Single row (ID=1); used for bind addresses, bonjour, JWT.
 type MetaConfig struct {
-	ID   uint   `gorm:"primaryKey" json:"id"`
-	Host string `gorm:"size:255;not null;default:0.0.0.0" json:"host"`
+	ID            uint   `gorm:"primaryKey" json:"id"`
+	Host          string `gorm:"size:255;not null;default:0.0.0.0" json:"host"`
 	MumblePort    int    `gorm:"not null;default:64738" json:"mumble_port"`
 	RESTPort      int    `gorm:"not null;default:64730" json:"rest_port"`
 	Bonjour       bool   `gorm:"not null;default:false" json:"bonjour"`

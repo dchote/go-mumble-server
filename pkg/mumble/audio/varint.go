@@ -75,7 +75,7 @@ func EncodeVarint(b []byte, value int64) int {
 	}
 	// 10xxxxxx + 1 byte 14-bit positive number
 	if value <= 0x3FFF {
-		b[0] = byte(((value>>8)&0x3F) | 0x80)
+		b[0] = byte(((value >> 8) & 0x3F) | 0x80)
 		b[1] = byte(value & 0xFF)
 		return 2
 	}

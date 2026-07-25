@@ -109,14 +109,6 @@ const (
 	UserStateSetRecording       uint32 = 1 << 18
 )
 
-// UserStateVoiceFields is the set of presence bits for the flags that gate audio
-// routing. Broadcasts of authoritative user state set all of them so that clients
-// which key off field presence (rather than tracking state locally) always receive
-// an unambiguous value, including when a flag is cleared.
-const UserStateVoiceFields = UserStateSetMute | UserStateSetDeaf | UserStateSetSuppress |
-	UserStateSetSelfMute | UserStateSetSelfDeaf | UserStateSetPrioritySpeaker |
-	UserStateSetRecording
-
 // UserState (type 9).
 type UserState struct {
 	Session                   uint32

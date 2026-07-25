@@ -4,12 +4,12 @@ import "github.com/dchote/go-mumble-server/pkg/mumble/protocol/wire"
 
 // Version (type 0). Field nums from Mumble.proto.
 type Version struct {
-	VersionV1     uint32
-	VersionV2     uint64
-	Release       string
-	OS            string
-	OSVersion     string
-	CryptoModes   uint32 // bitmask: bit0=lite, bit1=legacy, bit2=secure
+	VersionV1   uint32
+	VersionV2   uint64
+	Release     string
+	OS          string
+	OSVersion   string
+	CryptoModes uint32 // bitmask: bit0=lite, bit1=legacy, bit2=secure
 }
 
 func (m *Version) Marshal() ([]byte, error) {

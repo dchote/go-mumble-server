@@ -9,6 +9,9 @@ import (
 	"gorm.io/gorm"
 )
 
+// rootChannelID is fixed at 0 by the Mumble protocol.
+const rootChannelID uint32 = 0
+
 // Manager maintains the channel tree state.
 type Manager struct {
 	mu       sync.RWMutex
@@ -57,8 +60,12 @@ func (m *Manager) load() {
 			Position:   0,
 			InheritACL: true,
 		}
+		// GORM drops a zero-valued primary key from the INSERT, so SQLite
+		// auto-assigns id 1 and the root ends up somewhere RootID() (always 0)
+		// cannot find it — which silently voids every root-scoped ACL check.
+		// fixRootID moves it back to 0.
 		if err := m.db.Select("ID", "ServerID", "ParentID", "Name", "Position", "InheritACL").Create(&root).Error; err == nil {
-			rows = append(rows, root)
+			rows = m.fixRootID([]models.Channel{root})
 		}
 	} else {
 		rows = m.fixRootID(rows)
@@ -97,8 +104,9 @@ func (m *Manager) load() {
 	}
 }
 
-// fixRootID migrates the root channel to ID 0 if a pre-existing database has
-// it at a different ID (caused by GORM auto-increment before the Select fix).
+// fixRootID migrates the root channel to ID 0 if the database has it at a
+// different ID, which happens whenever the row was inserted with an
+// auto-assigned primary key.
 func (m *Manager) fixRootID(rows []models.Channel) []models.Channel {
 	var rootIdx int = -1
 	hasZero := false
@@ -149,7 +157,19 @@ func ptrToUint32(p *uint) uint32 {
 	return uint32(*p)
 }
 
-// GetChannel returns a channel by ID.
+// cloneChannel returns a private copy. Update mutates the stored channels in
+// place under the write lock, so handing a caller the stored pointer would let it
+// read a channel that is being rewritten after the read lock is gone.
+func cloneChannel(ch *mumble.Channel) *mumble.Channel {
+	if ch == nil {
+		return nil
+	}
+	out := *ch
+	out.Links = append([]uint32(nil), ch.Links...)
+	return &out
+}
+
+// GetChannel returns a copy of a channel by ID.
 func (m *Manager) GetChannel(id uint32) (*mumble.Channel, bool) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -157,10 +177,18 @@ func (m *Manager) GetChannel(id uint32) (*mumble.Channel, bool) {
 	if !ok {
 		return nil, false
 	}
-	return n.Channel, true
+	return cloneChannel(n.Channel), true
 }
 
-// GetTree returns the full channel tree as a flat list (BFS order).
+// GetTree returns copies of every channel, depth-first from root, so a parent
+// always precedes its children. Clients rely on that order while they build their
+// own tree: Mumla's protocol library dereferences the parent as soon as a
+// ChannelState names one (humla ModelHandler.messageChannelState) and dies on an
+// unknown parent, so channels must never be announced out of order.
+//
+// A tree with no channel 0 is broken rather than merely unrooted — load and
+// fixRootID guarantee root is 0 — and is reported as empty. Guessing a root from
+// ParentID == 0 would pick a direct child of root just as readily as root itself.
 func (m *Manager) GetTree() []*mumble.Channel {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -170,27 +198,18 @@ func (m *Manager) GetTree() []*mumble.Channel {
 		if n == nil {
 			return
 		}
-		out = append(out, n.Channel)
+		out = append(out, cloneChannel(n.Channel))
 		for _, c := range n.Children {
 			walk(c)
 		}
 	}
-	root := m.tree[0]
-	if root == nil {
-		for _, n := range m.tree {
-			if n.ParentID == 0 {
-				root = n
-				break
-			}
-		}
-	}
-	walk(root)
+	walk(m.tree[rootChannelID])
 	return out
 }
 
 // RootID returns the root channel ID (0 per Mumble spec).
 func (m *Manager) RootID() uint32 {
-	return 0
+	return rootChannelID
 }
 
 // ServerID returns the virtual server ID.
@@ -204,28 +223,28 @@ func (m *Manager) AncestorChain(channelID uint32) []uint32 {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	var chain []uint32
+	seen := make(map[uint32]bool)
 	cid := channelID
 	for {
 		n, ok := m.tree[cid]
-		if !ok {
+		if !ok || seen[cid] {
 			break
 		}
+		seen[cid] = true
 		chain = append(chain, cid)
-		if n.ParentID == 0 && cid != 0 {
-			break
-		}
-		if n.ParentID == cid {
+		// Root is its own terminator: it lives at ID 0 and reports ParentID 0,
+		// which is also what every direct child of root reports, so the walk has
+		// to stop on the node rather than on the parent value.
+		if cid == rootChannelID {
 			break
 		}
 		cid = n.ParentID
-		if cid == 0 {
-			break
-		}
 	}
 	return chain
 }
 
-// GetChannelWithMeta returns the channel and its InheritACL. ok is false if not found.
+// GetChannelWithMeta returns a copy of the channel and its InheritACL. ok is
+// false if not found.
 func (m *Manager) GetChannelWithMeta(channelID uint32) (ch *mumble.Channel, inheritACL bool, ok bool) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -233,7 +252,7 @@ func (m *Manager) GetChannelWithMeta(channelID uint32) (ch *mumble.Channel, inhe
 	if !ok {
 		return nil, false, false
 	}
-	return n.Channel, n.InheritACL, true
+	return cloneChannel(n.Channel), n.InheritACL, true
 }
 
 // Create creates a new channel. Returns the channel or nil on error.
@@ -276,7 +295,7 @@ func (m *Manager) Create(parentID uint32, name string, description string, posit
 			return p.Children[i].Position < p.Children[j].Position
 		})
 	}
-	return ch
+	return cloneChannel(ch)
 }
 
 func ptrUint(v uint32) *uint { u := uint(v); return &u }
@@ -447,17 +466,4 @@ func (m *Manager) CleanEmptyTempChannels(hasUsers func(channelID uint32) bool) {
 			break
 		}
 	}
-}
-
-// NextID returns the next unused channel ID for temporary channels (in-memory only).
-func (m *Manager) NextID() uint32 {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	max := uint32(0)
-	for id := range m.tree {
-		if id > max {
-			max = id
-		}
-	}
-	return max + 1
 }

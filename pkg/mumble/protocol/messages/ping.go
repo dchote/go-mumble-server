@@ -4,17 +4,17 @@ import "github.com/dchote/go-mumble-server/pkg/mumble/protocol/wire"
 
 // Ping (type 3).
 type Ping struct {
-	Timestamp    uint64
-	Good         uint32
-	Late         uint32
-	Lost         uint32
-	Resync       uint32
-	UDPPackets   uint32
-	TCPPackets   uint32
-	UDPPingAvg   float32
-	UDPPingVar   float32
-	TCPPingAvg   float32
-	TCPPingVar   float32
+	Timestamp  uint64
+	Good       uint32
+	Late       uint32
+	Lost       uint32
+	Resync     uint32
+	UDPPackets uint32
+	TCPPackets uint32
+	UDPPingAvg float32
+	UDPPingVar float32
+	TCPPingAvg float32
+	TCPPingVar float32
 }
 
 func (m *Ping) Marshal() ([]byte, error) {

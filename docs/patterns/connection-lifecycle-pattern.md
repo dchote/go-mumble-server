@@ -124,12 +124,12 @@ A separate write goroutine (or buffered channel) serializes outbound messages to
 After authentication, the server sends the full world state via `sendSync` (CryptSetup, channels, users, ServerConfig, ServerSync). The connection is registered for UDP routing immediately after `CryptSetup` is sent, before the rest of the sync, so `HandleUDP` can identify the sender when the client sends its first UDP packet (ping or voice) after receiving `CryptSetup`.
 
 1. All `ChannelState` messages (depth-first from root). `channel_id` is always emitted (root = 0); root omits the `parent` field (proto2 optional).
-2. All `UserState` messages for connected users. `session` and `channel_id` are always emitted (users in root have `channel_id` 0).
+2. All `UserState` **snapshots** for connected users (`userToState`). `session` and `channel_id` are always emitted (users in root have `channel_id` 0); voice flags are emitted only when `true` (Murmur snapshot shape — see [0007](../features/0007-userstate-field-presence.md)). After sync completes, a join announce (`Broadcast(joiner, userToState(joiner))`) uses the same snapshot shape for observers.
 3. `ServerConfig` with limits and welcome text
 4. `CodecVersion` with negotiated codec
 5. `ServerSync` with the client's session ID, welcome text, and root channel permissions
 
-Clients that build the channel tree and user list from these messages will correctly see the root channel and all users, including those in root.
+Clients that build the channel tree and user list from these messages will correctly see the root channel and all users, including those in root. Subsequent mute toggles use **delta echoes**, not fresh snapshots — they omit `channel_id` and unrelated voice flags.
 
 ### Disconnect Cleanup (Server)
 
@@ -142,6 +142,12 @@ On disconnect:
 5. Release session ID back to the pool
 6. Close TCP connection and UDP crypto state
 7. Remove temporary channels if empty
+
+### Server-Initiated Disconnects
+
+A kick, a ban, or a client that starts recording where recording is forbidden all send the client a `UserRemove` carrying the reason and then tear the socket down. Writes are queued to a per-connection channel and drained by the write goroutine, so closing straight away discards the very message that explains the disconnect. These paths use `Conn.CloseAfterFlush`, which waits (bounded, 250 ms) for the queue to reach the socket first — the equivalent of murmur's `forceFlush()` before `disconnectSocket()`.
+
+`Conn.Close` never closes the write channel; it closes a `done` channel that the write loop selects on. Broadcasts racing with a disconnect therefore return `net.ErrClosed` instead of panicking on a send to a closed channel.
 
 ## Client Perspective
 

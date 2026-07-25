@@ -45,7 +45,7 @@ func (m *ChannelRemove) Unmarshal(data []byte) error {
 type ChannelState struct {
 	ChannelID         uint32
 	Parent            uint32
-	HasParent         bool   // if true, parent field is sent on wire; root omits parent
+	HasParent         bool // if true, parent field is sent on wire; root omits parent
 	Name              string
 	Links             []uint32
 	Description       string

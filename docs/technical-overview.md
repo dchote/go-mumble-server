@@ -45,8 +45,8 @@ The project is organized into two layers:
 │  │           │ │  table)   │ │          │ │  codecs)  │ │
 │  └───────────┘ └──────────┘ └──────────┘ └───────────┘ │
 │  ┌───────────────────────────────────────────────────┐  │
-│  │  Core types: Channel, User, Permission, ACL,      │  │
-│  │  VoiceTarget, TextMessage, Version, CryptSetup    │  │
+│  │  Core types: Channel, User, Permission; wire      │  │
+│  │  messages carry ACL/ban/voice target/text/version │  │
 │  └───────────────────────────────────────────────────┘  │
 └───────────────────────┬─────────────────────────────────┘
                         │ import
@@ -149,12 +149,7 @@ go-mumble-server/
 │       ├── audio/               # Audio packet parsing, varint codec, codec IDs
 │       ├── channel.go           # Channel type definition
 │       ├── user.go              # User type definition
-│       ├── permission.go        # Permission bitmask constants and helpers
-│       ├── acl.go               # ACL and Group type definitions
-│       ├── voicetarget.go       # VoiceTarget type definition
-│       ├── textmessage.go       # TextMessage type definition
-│       ├── version.go           # Version encoding/decoding
-│       └── ban.go               # BanEntry type definition
+│       └── permission.go        # Permission bitmask constants and helpers
 ├── internal/                    # ── Server-Only Implementation ──
 │   ├── server/                  # Virtual server lifecycle, Meta
 │   ├── cert/                    # TLS certificate persistence per virtual server
@@ -195,9 +190,9 @@ The boundary is drawn by a single question: **does this code need server state?*
 | Audio packet parse/build | User session lifecycle |
 | Varint codec | Authentication and registration |
 | Permission bitmask type | Database persistence |
-| Core data types (Channel, User, ACL) | REST API |
-| Voice target type definitions | Configuration and logging |
-| Version encode/decode | Virtual server orchestration |
+| Core data types (Channel, User) | REST API |
+| Wire message structs (incl. VoiceTarget, Ban, Version) | Configuration and logging |
+| | Virtual server orchestration |
 | | Embedded frontend + SPA handler |
 
 ## Subsystem Design
@@ -264,10 +259,11 @@ Access control uses a layered model, implemented in `internal/acl/evaluator.go`:
 
 1. **Groups** — Named sets of users, defined per-channel with inheritance. Special groups: `all`, `auth`, `in`, `out`, `admin`, `sub`.
 2. **ACL entries** — Per-channel rules mapping a user, group, or token to granted/denied permissions. Supports eval-locality (`EvalHere`, ~) and selector inversion (`Invert`, !).
-3. **Inheritance** — ACLs and groups cascade down the channel tree unless `InheritACL` is false.
+3. **Inheritance** — `InheritACL` is a property of the child: the chain is built by walking up from the target and stopping at the first channel that does not inherit (that channel's own entries still count). The walk always reaches root otherwise, which is what makes root the place for server-wide policy.
 4. **Access tokens** — Clients supply tokens in the Authenticate message; stored on `User.AccessTokens` for token group membership.
-5. **Caching** — Permissions cached per (user, channel); invalidated on ACL change (REST PUT) and user channel move.
-6. **Default ACLs** — Root channel seeded with `all` (Traverse, Enter, Speak, Whisper, TextMessage, Listen), `auth` (MakeTempChannel, SelfRegister), `admin` (Write) via `EnsureDefaultRootACLs()`.
+5. **Caching** — Permissions cached per (subject, channel), where a subject is `{SessionID, UserID}` so that guests, who all share user ID 0, still get their own `@in`/`@out` and token answers; flushed on ACL change (REST PUT), user channel move, forced moves from a channel removal, and client authentication.
+6. **Baseline** — Every evaluation starts from `acl.DefaultPermissions` (Traverse, Enter, Speak, Whisper, TextMessage, Listen) plus the self-service permissions a registered or API-admin account always holds, whether or not any ACL exists.
+7. **Default ACLs** — Root channel seeded with `all` (Traverse, Enter, Speak, Whisper, TextMessage, Listen), `auth` (MakeTempChannel, SelfRegister), `admin` (Write) via `EnsureDefaultRootACLs()`. Rows are written through `acl.CreateACL` / `acl.CreateGroup`, the only inserts that preserve a false `ApplyHere`/`ApplySubs`/`Inherit`.
 
 UserID is resolved from `registered_users` or API users at authenticate. Unregistered users receive userID 0 and get permissions through normal ACL evaluation. API users (from the management `users` table) receive synthetic userIDs and RBAC roles are resolved for `@admin` membership. See [RBAC Strategy](patterns/acl-evaluation-pattern.md#rbac-strategy-api-users).
 
@@ -432,7 +428,8 @@ On first start, the TOML/env/flag values seed both tables. Subsequent changes ar
 - [Security Modes](protocol/security-modes.md) — Per-client negotiated crypto tiers and mixed-mode enforcement
 - [Encryption](protocol/encryption.md) — TLS, AEAD ciphers, password hashing
 - [Permissions](protocol/permissions.md) — Permission bitmask definitions
-- [0007: UserState field presence](features/0007-userstate-field-presence.md) — Proto2 has-bits, mute/deaf cascade, Mumla/Plumble unmute fix
+- [0007: UserState field presence](features/0007-userstate-field-presence.md) — Proto2 has-bits, Murmur snapshot-vs-delta-echo, mute/deaf cascade, Mumla/Humla unmute fix
+- [0008: UserState authorization and limits](features/0008-userstate-authorization-and-limits.md) — SuperUser immunity, cross-user content rules, content limits, recording policy, ACL chain fixes
 
 ### Patterns
 
@@ -458,7 +455,7 @@ On first start, the TOML/env/flag values seed both tables. Subsequent changes ar
 | Swagger at `/docs` | Self-documenting API; standard tooling for client generation |
 | TOML bootstrap + SQLite config | TOML for pre-DB settings; SQLite for runtime config editable via API/UI |
 | `internal/` for server logic | Enforces encapsulation; public API only via `pkg/mumble/` and REST |
-| Core types in library | `Channel`, `User`, `Permission`, `ACL` live in `pkg/` so clients have the same vocabulary as the server |
+| Core types in library | `Channel`, `User`, `Permission` live in `pkg/`; ACL/ban/voice-target/text/version payloads live in `pkg/mumble/protocol/messages` |
 | **No Google protobuf** | Protocol uses native Go structs and hand-written wire encoding. Do not add `google.golang.org/protobuf` or protoc-generated code. |
 | Vue 3 + Vuetify frontend | Material Design UI with rich component library; Vuetify provides accessible, responsive components out of the box |
 | Embedded frontend via `//go:embed` | Single binary deployment; no separate web server needed; same binary serves both API and UI |

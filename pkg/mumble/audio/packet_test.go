@@ -8,7 +8,7 @@ import (
 // buildLegacyPacket builds a client-to-server legacy binary packet for testing.
 func buildLegacyPacket(codec, target uint8, seq int64, payloadLen int64, terminator bool, payload []byte) []byte {
 	var buf bytes.Buffer
-	header := (codec & 0x7)<<5 | (target & 0x1F)
+	header := (codec&0x7)<<5 | (target & 0x1F)
 	buf.WriteByte(header)
 	enc := make([]byte, MaxVarintLen)
 	n := EncodeVarint(enc, seq)

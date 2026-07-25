@@ -44,12 +44,20 @@ func TestUserState_ExplicitFalseSurvivesRoundTrip(t *testing.T) {
 	}
 }
 
+// allVoiceFieldBits mirrors the seven voice-flag presence bits. It exists only in this
+// codec-layer test file (not in the production package) so a policy layer cannot
+// accidentally depend on a "set everything" convenience constant again; see the
+// delta-vs-snapshot rule in docs/architecture/protocol-encoding.md.
+const allVoiceFieldBits = UserStateSetMute | UserStateSetDeaf | UserStateSetSuppress |
+	UserStateSetSelfMute | UserStateSetSelfDeaf | UserStateSetPrioritySpeaker |
+	UserStateSetRecording
+
 // The whole point of the fix: an unmute broadcast must carry self_mute=false rather
 // than omitting the field.
 func TestUserState_UnmuteBroadcastCarriesExplicitFalse(t *testing.T) {
 	unmuted := &UserState{
 		Session:   3,
-		SetFields: UserStateSetSession | UserStateSetChannelID | UserStateVoiceFields,
+		SetFields: UserStateSetSession | UserStateSetChannelID | allVoiceFieldBits,
 	}
 	data, err := unmuted.Marshal()
 	if err != nil {
@@ -125,7 +133,7 @@ func TestUserState_ValuesRoundTrip(t *testing.T) {
 		Comment:         "hi",
 		Hash:            "abc",
 		SetFields: UserStateSetSession | UserStateSetActor | UserStateSetName |
-			UserStateSetUserID | UserStateSetChannelID | UserStateVoiceFields |
+			UserStateSetUserID | UserStateSetChannelID | allVoiceFieldBits |
 			UserStateSetComment | UserStateSetHash,
 	}
 	data, err := in.Marshal()

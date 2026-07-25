@@ -10,17 +10,45 @@ import (
 	"gorm.io/gorm"
 )
 
+// DefaultPermissions is murmur's grant to every user before any ACL is evaluated
+// (ChanACL::Perm defaults): ordinary participation is allowed, administration is
+// not. Everything that needs the baseline reads it from here.
+const DefaultPermissions = mumble.PermissionTraverse | mumble.PermissionEnter |
+	mumble.PermissionSpeak | mumble.PermissionWhisper |
+	mumble.PermissionTextMessage | mumble.PermissionListen
+
+// Subject identifies whose permissions are being resolved.
+//
+// A connected client is identified by its session, not by its registered user ID:
+// every unregistered user shares user ID 0, while `@in`/`@out` membership and
+// token groups depend on the individual session's channel and access tokens.
+// SessionID is 0 for callers that are not a connected client, such as the REST API.
+type Subject struct {
+	SessionID uint32
+	UserID    uint32
+}
+
+// SubjectOf builds a Subject from a user record.
+func SubjectOf(u mumble.User) Subject {
+	return Subject{SessionID: u.SessionID, UserID: u.UserID}
+}
+
+// SubjectForUserID identifies a registered account with no session of its own.
+func SubjectForUserID(userID uint32) Subject {
+	return Subject{UserID: userID}
+}
+
 // Evaluator resolves permissions for a user in a channel using DB ACLs and groups.
 type Evaluator struct {
-	mu     sync.RWMutex
-	db     *gorm.DB
-	chans  *channel.Manager
-	users  *user.Manager
-	cache  map[cacheKey]uint32
+	mu    sync.RWMutex
+	db    *gorm.DB
+	chans *channel.Manager
+	users *user.Manager
+	cache map[cacheKey]uint32
 }
 
 type cacheKey struct {
-	userID    uint32
+	subject   Subject
 	channelID uint32
 }
 
@@ -41,18 +69,18 @@ func (e *Evaluator) InvalidateCache() {
 	e.cache = make(map[cacheKey]uint32)
 }
 
-// Check returns whether the user has the given permission in the channel.
-func (e *Evaluator) Check(userID uint32, channelID uint32, perm mumble.Permission) bool {
-	perms := e.EffectivePermissions(userID, channelID)
+// Check returns whether the subject has the given permission in the channel.
+func (e *Evaluator) Check(subject Subject, channelID uint32, perm mumble.Permission) bool {
+	perms := e.EffectivePermissions(subject, channelID)
 	if perms&uint32(mumble.PermissionWrite) != 0 {
 		return true
 	}
 	return perms&uint32(perm) == uint32(perm)
 }
 
-// EffectivePermissions returns the permission bitmask for userID in channelID.
-func (e *Evaluator) EffectivePermissions(userID uint32, channelID uint32) uint32 {
-	key := cacheKey{userID, channelID}
+// EffectivePermissions returns the permission bitmask for the subject in channelID.
+func (e *Evaluator) EffectivePermissions(subject Subject, channelID uint32) uint32 {
+	key := cacheKey{subject, channelID}
 	e.mu.RLock()
 	if p, ok := e.cache[key]; ok {
 		e.mu.RUnlock()
@@ -60,7 +88,7 @@ func (e *Evaluator) EffectivePermissions(userID uint32, channelID uint32) uint32
 	}
 	e.mu.RUnlock()
 
-	perms := e.evaluate(userID, channelID)
+	perms := e.evaluate(subject, channelID)
 
 	e.mu.Lock()
 	e.cache[key] = perms
@@ -68,18 +96,17 @@ func (e *Evaluator) EffectivePermissions(userID uint32, channelID uint32) uint32
 	return perms
 }
 
-func (e *Evaluator) evaluate(userID uint32, channelID uint32) uint32 {
-	// Murmur baseline: all users start with these permissions before ACL evaluation.
-	def := uint32(mumble.PermissionTraverse | mumble.PermissionEnter |
-		mumble.PermissionSpeak | mumble.PermissionWhisper |
-		mumble.PermissionTextMessage | mumble.PermissionListen)
+func (e *Evaluator) evaluate(subject Subject, channelID uint32) uint32 {
+	// The same starting point whether or not ACLs exist, so that an admin does not
+	// lose their standing rights the moment somebody adds the first ACL row.
+	def := e.defaultRootPerms(subject.UserID)
 
 	chain := e.buildACLChain(channelID)
 	if len(chain) == 0 {
-		return e.defaultRootPerms(userID)
+		return def
 	}
 
-	u := e.getUserByUserID(userID)
+	u := e.resolveUser(subject)
 	userChannelID := uint32(0)
 	if u != nil {
 		userChannelID = u.ChannelID
@@ -91,7 +118,7 @@ func (e *Evaluator) evaluate(userID uint32, channelID uint32) uint32 {
 		if !e.entryApplies(entry, channelID) {
 			continue
 		}
-		if !e.entryMatches(entry, userID, channelID, userChannelID, u) {
+		if !e.entryMatches(entry, subject.UserID, channelID, userChannelID, u) {
 			continue
 		}
 		granted |= entry.Grant
@@ -121,21 +148,26 @@ func (e *Evaluator) buildACLChain(targetChannelID uint32) []aclEntry {
 	if len(chain) == 0 {
 		return nil
 	}
-	// chain[0] = target, chain[len-1] = root
-	// Walk from root to target, collect ACLs where InheritACL allows
+	// chain[0] = target, chain[len-1] = root.
+	//
+	// InheritACL describes whether a channel takes its *parent's* ACLs, so the
+	// walk up stops at the first channel that does not inherit: that channel's
+	// own ACLs still count, its ancestors' do not (ACL.cpp, hasPermission).
+	top := len(chain) - 1
+	for i, cid := range chain {
+		_, inherit, ok := e.chans.GetChannelWithMeta(cid)
+		if !ok || !inherit {
+			top = i
+			break
+		}
+	}
+
+	// Entries are collected outermost-first so that the closer channel's grants
+	// and denials are applied last and win.
 	serverID := e.chans.ServerID()
 	var entries []aclEntry
-	for i := len(chain) - 1; i >= 0; i-- {
+	for i := top; i >= 0; i-- {
 		cid := chain[i]
-		_, inherit, ok := e.chans.GetChannelWithMeta(cid)
-		if !ok {
-			continue
-		}
-		// Include this channel's ACLs if: we're at target, or inherit is true
-		include := (uint32(cid) == targetChannelID) || inherit
-		if !include {
-			continue
-		}
 		var rows []models.ChannelACL
 		if err := e.db.Where("server_id = ? AND channel_id = ?", serverID, cid).Order("priority, id").Find(&rows).Error; err != nil {
 			continue
@@ -153,13 +185,6 @@ func (e *Evaluator) buildACLChain(targetChannelID uint32) []aclEntry {
 				Grant:       r.Grant,
 				Deny:        r.Deny,
 			})
-		}
-		// If this channel does not inherit, stop
-		if uint32(cid) == targetChannelID && !inherit {
-			break
-		}
-		if !inherit && uint32(cid) != targetChannelID {
-			break
 		}
 	}
 	return entries
@@ -279,29 +304,41 @@ func (e *Evaluator) userInStoredGroup(userID uint32, groupName string, channelID
 	return members[userID]
 }
 
-func (e *Evaluator) getUserByUserID(userID uint32) *mumble.User {
-	for _, u := range e.users.ListAll() {
-		if u.UserID == userID {
-			return u
-		}
+// resolveUser finds the record a subject's channel and access tokens come from.
+// The session is authoritative when there is one; falling back to the registered
+// ID covers callers with no session, such as the REST API. The returned record is
+// a private copy owned by this call: the manager never hands out pointers to live
+// records (see user.Manager).
+func (e *Evaluator) resolveUser(subject Subject) *mumble.User {
+	if e.users == nil {
+		return nil
 	}
-	return nil
+	if subject.SessionID != 0 {
+		if u, ok := e.users.Snapshot(subject.SessionID); ok {
+			return &u
+		}
+		return nil
+	}
+	if subject.UserID == 0 {
+		return nil
+	}
+	u, ok := e.users.SnapshotByUserID(subject.UserID)
+	if !ok {
+		return nil
+	}
+	return &u
 }
 
 func (e *Evaluator) defaultRootPerms(userID uint32) uint32 {
-	// Murmur baseline: everyone gets these by default.
-	p := uint32(mumble.PermissionTraverse | mumble.PermissionEnter |
-		mumble.PermissionSpeak | mumble.PermissionWhisper |
-		mumble.PermissionTextMessage | mumble.PermissionListen)
-	// Registered users additionally get self-service permissions.
-	if userID > 0 && !IsAPIUserID(userID) {
-		p |= uint32(mumble.PermissionMakeTempChannel | mumble.PermissionSelfRegister)
+	p := uint32(DefaultPermissions)
+	if userID == 0 {
+		return p
 	}
-	if IsAPIUserID(userID) {
-		p |= uint32(mumble.PermissionMakeTempChannel | mumble.PermissionSelfRegister)
-		if ResolveAPIAdmin(e.db, userID) {
-			p |= uint32(mumble.PermissionWrite)
-		}
+	// Any identified account, registered or from the management API, may also
+	// create temporary channels and register itself.
+	p |= uint32(mumble.PermissionMakeTempChannel | mumble.PermissionSelfRegister)
+	if IsAPIUserID(userID) && ResolveAPIAdmin(e.db, userID) {
+		p |= uint32(mumble.PermissionWrite)
 	}
 	return p
 }
